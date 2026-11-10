@@ -398,6 +398,11 @@ TEST_CASE ("v1-device-id: a device's DEVICE_ID is read, written back only where 
     CHECK_FALSE (chunk.devices[1].deviceId.has_value());
     CHECK (chunk.devices[0].extras.isEmpty());          // a field this version reads is not an extra
 
+    //  And whether a hand set honours_timetags (6x-5): true on the first, absent on the second.
+    CHECK (chunk.devices[0].timetagsByHand);
+    CHECK_FALSE (chunk.devices[0].honoursTimetags);
+    CHECK_FALSE (chunk.devices[1].timetagsByHand);
+
     //  Round trip: the same JSON, the key on the first device and not on the second.
     const auto once = chunk.toJson();
     std::string error;
@@ -411,9 +416,12 @@ TEST_CASE ("v1-device-id: a device's DEVICE_ID is read, written back only where 
     REQUIRE (devices->size() == 2);
     CHECK ((*devices)[0].getProperty ("device_id", "").toString() == "6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47");
     CHECK_FALSE ((*devices)[1].hasProperty ("device_id"));
+    CHECK ((*devices)[0].getProperty ("timetags_by_hand", false) == juce::var (true));
+    CHECK_FALSE ((*devices)[1].hasProperty ("timetags_by_hand"));
 
     //  A chunk saved before this field existed says nothing of it when saved again.
     CHECK (load ("v1-generic.json", 32).toJson().find ("device_id") == std::string::npos);
+    CHECK (load ("v1-generic.json", 32).toJson().find ("timetags_by_hand") == std::string::npos);
 
     //  Not a string, or empty: not an identifier, and not kept as one.
     const auto odd = StateChunk::fromJson (R"({ "version": 1, "devices": [

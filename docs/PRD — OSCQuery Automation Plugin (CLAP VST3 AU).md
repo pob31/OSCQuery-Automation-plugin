@@ -148,7 +148,7 @@ All bindings live in the plugin's state chunk inside the DAW session. No externa
 **State chunk (JSON, versioned)**
 
 - `version`
-- `devices[]`: `name`, `last_host`, `last_port`, `tree_hash` (hash of the typed leaves at bind time; this said "bindable leaves" until 2026-11-10, which the hash never was: it takes every leaf with a `TYPE`, so that it does not depend on which client asks), `identity_path` and `identity_value` (optional), `device_id` (optional, the device's `DEVICE_ID` when it declares one; added 2026-11-10), `honours_timetags`, `offset_ms`
+- `devices[]`: `name`, `last_host`, `last_port`, `tree_hash` (hash of the typed leaves at bind time; this said "bindable leaves" until 2026-11-10, which the hash never was: it takes every leaf with a `TYPE`, so that it does not depend on which client asks), `identity_path` and `identity_value` (optional), `device_id` (optional, the device's `DEVICE_ID` when it declares one; added 2026-11-10), `honours_timetags`, `timetags_by_hand` (optional, true when a hand set `honours_timetags`, so that it stands over a device's `CLOCK` on reload; added 2026-11-10), `offset_ms`
 - `slots[]`: `host_param_id`, `device_index`, `path`, `arg_index`, `type`, `range`, `scaling`, `direction`, `display_name`, `range_overridden`
 - `values[]`: every slot's host value, 0–1, in slot order (added 2026-11-09, milestone 4b: a CLAP restores its own parameter values from its state, and clap-validator checks that it does; every format writes them, so the chunk opens anywhere with its values)
 - `instance`: the number `$instance` stands for in this instance's paths, user-set, default 1 (added 2026-11-09 for the Monitor's bulk bind); a slot bound through a pattern keeps it as `path_pattern` beside its resolved `path`

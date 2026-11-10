@@ -129,6 +129,7 @@ namespace oqa::editor
         juce::TextButton addButton { "Add" };
 
         juce::ToggleButton timetagsToggle { "honours timetags" };
+        const juce::String timetagsTooltip { "The device schedules OSC bundles by their timetag: sends carry the intended playback time plus the offset. Off, it receives the immediate tag." };
         juce::Label offsetLabel { {}, "offset ms" };
         juce::Label offsetField;
         void updateTiming();

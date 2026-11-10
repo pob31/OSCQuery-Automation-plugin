@@ -42,6 +42,7 @@ namespace oqa::core
             constexpr const char* identityValue   = "identity_value";
             constexpr const char* deviceId        = "device_id";
             constexpr const char* honoursTimetags = "honours_timetags";
+            constexpr const char* timetagsByHand  = "timetags_by_hand";
             constexpr const char* offsetMs        = "offset_ms";
 
             constexpr const char* hostParamId     = "host_param_id";
@@ -63,7 +64,7 @@ namespace oqa::core
 
         const std::set<std::string> deviceKeys {
             key::name, key::lastHost, key::lastPort, key::treeHash, key::identityPath,
-            key::identityValue, key::deviceId, key::honoursTimetags, key::offsetMs
+            key::identityValue, key::deviceId, key::honoursTimetags, key::timetagsByHand, key::offsetMs
         };
 
         const std::set<std::string> slotKeys {
@@ -137,6 +138,9 @@ namespace oqa::core
 
             out.honoursTimetags = static_cast<bool> (object->getProperty (key::honoursTimetags));
 
+            const auto byHand = object->getProperty (key::timetagsByHand);
+            out.timetagsByHand = byHand.isBool() && static_cast<bool> (byHand);
+
             const auto offset = object->getProperty (key::offsetMs);
             out.offsetMs = finiteNumber (offset) ? static_cast<double> (offset) : 0.0;
 
@@ -163,6 +167,9 @@ namespace oqa::core
                 object->setProperty (key::deviceId, juce::String (*device.deviceId));
 
             object->setProperty (key::honoursTimetags, device.honoursTimetags);
+
+            if (device.timetagsByHand)
+                object->setProperty (key::timetagsByHand, true);
             object->setProperty (key::offsetMs, device.offsetMs);
 
             writeExtras (*object, device.extras);

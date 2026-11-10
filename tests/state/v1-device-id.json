@@ -7,7 +7,8 @@
       "last_port": 5005,
       "tree_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "device_id": "6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47",
-      "honours_timetags": true,
+      "honours_timetags": false,
+      "timetags_by_hand": true,
       "offset_ms": 0.0
     },
     {

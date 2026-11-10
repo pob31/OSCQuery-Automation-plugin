@@ -611,6 +611,14 @@ namespace oqa::core
                     {
                         ref.honoursTimetags = static_cast<bool> (d.getProperty ("honours_timetags", ref.honoursTimetags));
                         ref.offsetMs = static_cast<double> (d.getProperty ("offset_ms", ref.offsetMs));
+                        ref.timetagsByHand = true;
+                    }
+                    else if (d.getProperty ("timetags_origin", "").toString() == "device")
+                    {
+                        /*  The device's own word (the optional CLOCK, 6x-5):
+                            saved as a chunk's value, not as a hand's, so the
+                            device may say otherwise next time. */
+                        ref.honoursTimetags = static_cast<bool> (d.getProperty ("honours_timetags", ref.honoursTimetags));
                     }
 
                     const auto resolution = d.getProperty ("resolution", "").toString();
@@ -742,6 +750,7 @@ namespace oqa::core
         auto& ref = state.devices[static_cast<std::size_t> (deviceIndex)];
         ref.honoursTimetags = honoursTimetags;
         ref.offsetMs = std::isfinite (offsetMs) ? offsetMs : 0.0;
+        ref.timetagsByHand = true;
         push();
 
         /*  By hand, process-wide: stands whatever chunk is pushed next. */

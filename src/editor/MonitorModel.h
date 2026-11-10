@@ -45,6 +45,12 @@ namespace oqa::editor
             double bundlesPerSecond = 0.0, messagesPerSecond = 0.0, receivedPerSecond = 0.0;
             bool honoursTimetags = false, timingByHand = false;
             double offsetMs = 0.0;
+
+            /*  Phase 6x: whose word honoursTimetags is ("chunk", "device",
+                "saved_hand" or "hand"), the clock the device declares when it
+                declares one, and the DEVICE_ID it is known by. */
+            juce::String timetagsOrigin, clockSource, clockDomain, deviceId;
+            bool clockDeclared = false, clockScheduling = false;
             juce::int64 loopGuarded = 0, rateLimited = 0, datagramsDropped = 0, sendFailures = 0;
 
             /** "12 bundles/s, 40 msg/s, 3 rx/s" */
@@ -55,7 +61,13 @@ namespace oqa::editor
 
             /** The last error with its age, or empty. */
             juce::String errorWords() const;
+
+            /** "The device declares its clock: ptp, domain 0, scheduling by timetag. Ticked from that declaration." or empty. */
+            juce::String timetagsWords() const;
         };
+
+        /** The same words from one device's status object, for the editor's device pane. */
+        static juce::String timetagsWords (const juce::var& deviceStatus);
 
         struct Slot
         {

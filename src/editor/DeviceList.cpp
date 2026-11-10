@@ -16,6 +16,7 @@
 */
 
 #include "DeviceList.h"
+#include "MonitorModel.h"
 
 namespace oqa::editor
 {
@@ -90,7 +91,7 @@ namespace oqa::editor
 
         /*  The device's timing, by hand (6a-3): the Monitor and every editor
             share it, and every chunk takes it on its next save. */
-        timetagsToggle.setTooltip ("The device schedules OSC bundles by their timetag: sends carry the intended playback time plus the offset. Off, it receives the immediate tag.");
+        timetagsToggle.setTooltip (timetagsTooltip);
         timetagsToggle.onClick = [this]
         {
             if (selected >= 0 && selected < static_cast<int> (instance.chunk().devices.size()))
@@ -420,6 +421,29 @@ namespace oqa::editor
             row.reachable = false;
             row.state = "recent";
             rows.push_back (row);
+        }
+
+        /*  The selected device's timing as the registry holds it (6x-5): a
+            device that declares the optional CLOCK ticks the box itself, and
+            the chunk only learns of it on the next save, so the registry's
+            word is shown; the tooltip says whose word it is. */
+        {
+            juce::String words = timetagsTooltip;
+
+            if (devices != nullptr && selected >= 0 && selected < devices->size()
+                && selected < static_cast<int> (chunk.devices.size()) && (*devices)[selected].isObject())
+            {
+                const auto& d = (*devices)[selected];
+
+                if (d.getProperty ("timetags_origin", "").toString() == "device")
+                    timetagsToggle.setToggleState (static_cast<bool> (d.getProperty ("honours_timetags", false)), juce::dontSendNotification);
+
+                if (const auto said = MonitorModel::timetagsWords (d); said.isNotEmpty())
+                    words << " " << said;
+            }
+
+            if (timetagsToggle.getTooltip() != words)
+                timetagsToggle.setTooltip (words);
         }
 
         list.updateContent();

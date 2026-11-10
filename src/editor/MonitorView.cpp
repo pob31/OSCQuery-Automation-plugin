@@ -101,7 +101,8 @@ namespace oqa::editor
             switch (column)
             {
                 case address:  return "host:port the registry drives this device at (" + d.resolution + "). Double-click to point it by hand; every instance follows.";
-                case timetags: return "The device schedules OSC bundles by their timetag. Set by hand here, it stands for every instance and lands in each chunk on save.";
+                case timetags: return "The device schedules OSC bundles by their timetag. Set by hand here, it stands for every instance and lands in each chunk on save."
+                                    + (d.timetagsWords().isNotEmpty() ? " " + d.timetagsWords() : juce::String());
                 case offset:   return "A signed offset in milliseconds for this device, applied to timetags or as a send delay.";
                 case rates:    return juce::String (d.loopGuarded) + " echoes dropped by the loop guard, " + juce::String (d.rateLimited) + " held by the rate limiter, "
                                     + juce::String (d.datagramsDropped) + " datagrams dropped, " + juce::String (d.sendFailures) + " send failures.";

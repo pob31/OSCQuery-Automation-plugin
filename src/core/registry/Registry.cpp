@@ -434,6 +434,8 @@ namespace oqa::core
               onRebuild (std::move (onRebuildIn)), onNeedsResolver (std::move (onNeedsResolverIn)),
               onReceived (std::move (onReceivedIn)), guardMs (settingsIn.loopGuardMs)
         {
+            timetagsRank = ref.timetagsByHand ? TimetagsRank::savedHand : TimetagsRank::chunk;
+            publishTiming();
             buffer.resize (datagramBufferBytes);
             openDevice();
             stopReplaced();
@@ -742,6 +744,10 @@ namespace oqa::core
                 if (! liveId.empty() && (next == Resolution::pointed || (next == Resolution::confirmed && savedId.empty())))
                     ref.deviceId = liveId;
 
+                //  And its word on time tags, only from a device that is the one meant (6x-5).
+                if (next == Resolution::confirmed || next == Resolution::pointed)
+                    takeClock (info->clock);
+
                 if (pointed)
                     candidates.clear();
             }
@@ -952,17 +958,79 @@ namespace oqa::core
             ticks in the Monitor", "set once per rig"). Set by hand (the
             Monitor, any editor) it stands, whatever chunk is pushed next;
             set by a chunk's push it is the last chunk's word until a hand
-            sets it (6a-3). */
-        void setTiming (bool honoursTimetags, double offsetMs, bool byHand)
+            sets it (6a-3).
+
+            Phase 6x-5, for whether the device honours time tags: a device that
+            declares the optional CLOCK says so itself (SCHEDULING), and its
+            word goes between the two. A hand wins over the device, and the
+            device over a chunk; a chunk whose value a hand set in an earlier
+            run (`timetags_by_hand`) keeps a hand's standing over the device,
+            so that unticking a device which claims to schedule survives a
+            reload. The offset is never the device's. */
+        enum class TimetagsRank { chunk = 0, device = 1, savedHand = 2, hand = 3 };
+
+        void setTiming (bool honoursTimetags, double offsetMs, bool byHand, bool chunkSaysByHand = false)
         {
             const std::lock_guard<std::mutex> guard (settingsLock);
 
             if (! byHand && timingByHand)
                 return;
 
-            ref.honoursTimetags = honoursTimetags;
+            const auto rank = byHand ? TimetagsRank::hand
+                                     : (chunkSaysByHand ? TimetagsRank::savedHand : TimetagsRank::chunk);
+
+            if (rank >= timetagsRank)
+            {
+                ref.honoursTimetags = honoursTimetags;
+                timetagsRank = rank;
+            }
+
             ref.offsetMs = std::isfinite (offsetMs) ? offsetMs : 0.0;
             timingByHand = timingByHand || byHand;
+            publishTiming();
+        }
+
+        /*  What the device at the address declares of its clock, or nothing
+            (identify(), once it is confirmed or pointed). Under settingsLock. */
+        void takeClock (const std::optional<oscquery::ClockInfo>& clock)
+        {
+            clockLive = clock;
+
+            if (clock.has_value())
+            {
+                if (timetagsRank <= TimetagsRank::device)
+                {
+                    ref.honoursTimetags = clock->scheduling;
+                    timetagsRank = TimetagsRank::device;
+                }
+            }
+            else if (timetagsRank == TimetagsRank::device)
+            {
+                //  It declared a clock and no longer does: the value stands, as a chunk's would.
+                timetagsRank = TimetagsRank::chunk;
+            }
+
+            publishTiming();
+        }
+
+        /** The send path's copy (flush(), on the network thread, takes no lock). Under settingsLock. */
+        void publishTiming() noexcept
+        {
+            timetagsNow.store (ref.honoursTimetags, std::memory_order_relaxed);
+            offsetMsNow.store (ref.offsetMs, std::memory_order_relaxed);
+        }
+
+        static const char* timetagsOrigin (TimetagsRank rank) noexcept
+        {
+            switch (rank)
+            {
+                case TimetagsRank::chunk:     return "chunk";
+                case TimetagsRank::device:    return "device";
+                case TimetagsRank::savedHand: return "saved_hand";
+                case TimetagsRank::hand:      return "hand";
+            }
+
+            return "chunk";
         }
 
         /*  The chunk's DEVICE_ID for this device, when the chunk has one and
@@ -1326,6 +1394,26 @@ namespace oqa::core
             o->setProperty ("honours_timetags", r.honoursTimetags);
             o->setProperty ("offset_ms", r.offsetMs);
             o->setProperty ("timing_by_hand", timingByHandNow());
+
+            /*  Whose word `honours_timetags` is, and the clock the device
+                declares when it declares one (6x-5). */
+            {
+                const std::lock_guard<std::mutex> guard (settingsLock);
+                o->setProperty ("timetags_origin", timetagsOrigin (timetagsRank));
+
+                if (clockLive.has_value())
+                {
+                    auto* clock = new juce::DynamicObject();
+                    clock->setProperty ("source", juce::String (clockLive->source));
+                    clock->setProperty ("domain", clockLive->domain.has_value() ? juce::var (juce::String (*clockLive->domain)) : juce::var());
+                    clock->setProperty ("scheduling", clockLive->scheduling);
+                    o->setProperty ("clock", juce::var (clock));
+                }
+                else
+                {
+                    o->setProperty ("clock", juce::var());
+                }
+            }
 
             withDevice ([&] (const oscquery::Device& d)
             {
@@ -1885,8 +1973,10 @@ namespace oqa::core
             for (auto* g : due)
                 g->lastSentNanos.store (sentAt, std::memory_order_relaxed);
 
-            const bool timetags = ref.honoursTimetags;
-            const auto tag = timetags ? ntpNow (ref.offsetMs) : immediateTimeTag;
+            /*  The published copy: `ref` is written under settingsLock by other
+                threads, and this thread takes no lock here (6x-5). */
+            const bool timetags = timetagsNow.load (std::memory_order_relaxed);
+            const auto tag = timetags ? ntpNow (offsetMsNow.load (std::memory_order_relaxed)) : immediateTimeTag;
 
             /*  CRITICAL on a device that is not TCP: a websocket frame each
                 (spec draft L4); what the websocket cannot take goes on the wire. */
@@ -2099,6 +2189,10 @@ namespace oqa::core
         std::string resolutionNoteText;
         bool handPointed = false;
         bool timingByHand = false;              // under settingsLock
+        TimetagsRank timetagsRank = TimetagsRank::chunk;        // under settingsLock: whose word honoursTimetags is
+        std::optional<oscquery::ClockInfo> clockLive;           // under settingsLock: the CLOCK the device declares
+        std::atomic<bool> timetagsNow { false };                // the send path's copy of ref.honoursTimetags
+        std::atomic<double> offsetMsNow { 0.0 };                // and of ref.offsetMs
         bool timingByHandNow() const { const std::lock_guard<std::mutex> guard (settingsLock); return timingByHand; }
         std::vector<CandidateInfo> candidates;
         std::atomic<bool> useDevice { false };                 // confirmed or pointed: send and LISTEN
@@ -2552,7 +2646,7 @@ namespace oqa::core
 
             if (found != devices.end())
             {
-                found->second->setTiming (ref.honoursTimetags, ref.offsetMs, false);
+                found->second->setTiming (ref.honoursTimetags, ref.offsetMs, false, ref.timetagsByHand);
                 found->second->setTreeHash (ref.treeHash);
                 found->second->setDeviceId (ref.deviceId);
                 return *found->second;

@@ -26,7 +26,8 @@
       version      1, from this first commit
       devices[]    name, last_host, last_port, tree_hash, identity_path,
                    identity_value, honours_timetags, offset_ms, and
-                   device_id when the device declares a DEVICE_ID (Phase
+                   device_id when the device declares a DEVICE_ID, and
+                   timetags_by_hand when a hand set honours_timetags (Phase
                    6x; additive, written only when set, version unchanged)
       slots[]      host_param_id, device_index, path, arg_index, type, range
                    {min, max}, scaling, direction, display_name,
@@ -95,6 +96,11 @@ namespace oqa::core
 
         bool honoursTimetags = false;
         double offsetMs = 0.0;
+
+        /*  Whether a hand set honoursTimetags (Phase 6x-5): it then stands
+            over what a device declares in the optional CLOCK. Written only
+            when true, so every chunk saved before keeps its bytes. */
+        bool timetagsByHand = false;
 
         /** Fields this version does not read, as saved. */
         juce::NamedValueSet extras;
