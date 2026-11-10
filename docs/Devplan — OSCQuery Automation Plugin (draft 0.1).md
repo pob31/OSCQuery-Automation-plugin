@@ -13,6 +13,12 @@ is itself a proposal that needs support, not a rewrite. No UUID, no `TIMETAGS`. 
 is `NAME`, the tree hash, and an optional identity leaf the user designates in the device's own
 tree; timetag support is a per-device setting. The PRD is amended accordingly.
 
+**Decided 2026-11-10, by the author:** beside the profile, which still adds no field, two
+**optional extensions**, `DEVICE_ID` and `CLOCK`, drafted by Julien Bayle in
+`docs/spec/extensions-draft-0.1.md`. Declared in `EXTENSIONS`, ignorable, additive; the plugin
+uses them when a device declares them and serves them itself (Phase 6b). **Pull requests from the
+same day**, Julien Bayle's first having been merged.
+
 ---
 
 ## How to read this
@@ -1053,6 +1059,78 @@ Built in nine commits on `main` in one session, 6a-1 to 6f, in the plan's order,
 
 ---
 
+## Phase 6b — Optional extensions: `DEVICE_ID` and `CLOCK` · M
+
+**Goal:** the plugin recognises a device by the identifier it declares and takes its word on
+timetags, and says both of itself, without asking anything of a device that declares neither.
+`docs/spec/extensions-draft-0.1.md`, first written by Julien Bayle (pull request #1).
+
+- **One rule throughout:** an extension is used only when `EXTENSIONS` lists it. A key that is
+  present but not declared is ignored. A device with neither behaves as on `e4cc790`, to the byte
+  of its saved chunk.
+- **Library**: `HOST_INFO` parsing reads `DEVICE_ID` (a non-empty string) and `CLOCK` (`SOURCE`,
+  optional `DOMAIN`, `SCHEDULING`) when declared; the server serves them from its options and
+  lists what it serves, so served and declared cannot drift apart.
+- **Mock device**: extra `HOST_INFO` members given verbatim, so a test can build the honest
+  device, the one that serves a key without declaring it, and two devices under one identifier.
+- **State chunk**: `devices[]` gains an optional `device_id`, written only when set; version 1
+  stands (the `path_pattern` and `instance` precedent), with its fixture in `tests/state/`.
+- **Re-identification**: the identifier goes in front of the PRD's sequence and replaces nothing.
+  At the last address, equal identifiers confirm the device even under a new `NAME` and different
+  ones are a mismatch even under the same; over DNS-SD a device declaring the saved identifier is
+  looked for first, whatever its `NAME`. Two live devices under one identifier are unresolved and
+  the user points; a candidate declaring another identifier is listed and never adopted without
+  the user. The registry's key stays `NAME` plus the identity leaf's value.
+- **Timing**: a declared `SCHEDULING` pre-fills *honours timetags*. The hand wins over the
+  device's word, and the device's word over the chunk's. The offset is never the device's.
+- **The plugin's own server** serves a `DEVICE_ID` kept per user and derived per host
+  application, and a `CLOCK` that claims the least (`local`, not scheduling). The Monitor shows it.
+
+**Done when:** against two mocks sharing a `NAME` with no identity leaf, a session reopens bound
+to the one that declares its identifier; the same session against a mock renamed since still
+finds it; two mocks under one identifier leave it unresolved until pointed; a mock declaring
+`SCHEDULING` true has its timetags setting ticked without a hand, and a hand that unticks it
+stays; a session saved before this phase reloads and saves to the same bytes against a device
+with neither extension, and WFS-DIY live behaves as before.
+
+**Needs from the author:** nothing blocking. The implementer's decisions under *Planned* are the
+author's to overrule.
+
+**Planned, 2026-11-10.** Taken before Phase 7 at the author's word. Two pull requests, the first
+since Julien Bayle's: the text (this section, the PRD's dated amendments, the corrected draft,
+C5's wording), then the code in seven subphases, each one commit with its tests: **6b-1** the
+library parses and serves; **6b-2** the mock device; **6b-3** the state chunk; **6b-4**
+re-identification; **6b-5** the clock on the client; **6b-6** the plugin's own server and the
+Monitor; **6b-7** the bench report and this record.
+
+- *Decided by the author the same day:* the pull request merged as it was and corrected on top;
+  the extensions optional and outside Core and Live, so "the Core profile adds no field" stands;
+  the plugin a client of both and a server of both. This is the recorded yes the cross-cutting
+  rule asks for before a clause beyond the PRD is implemented.
+- *Facts found while planning:* `tools/conform/` is a README until Phase 8, so the two checks
+  (X1, X2) are a table in the draft and a line in Phase 8, not code; the tree hash has always
+  been over every typed leaf (`lib/oscquery/oscquery/tree/Tree.h`), where C5 and the PRD said
+  "bindable", which depends on the asking client and which no device could serve: both texts are
+  amended; `HostInfo` keeps the device's object whole in `raw` but nothing reads it; each DNS-SD
+  candidate already carries its parsed `HOST_INFO`, so looking for an identifier costs no request;
+  a received bundle's time tag is decoded and then dropped on both receive paths
+  (`Device::deliverPacket`, the registry's `route`); the per-device offset is applied to time tags
+  only, and no send delay exists for a device with the setting off, though the PRD and two
+  tooltips say one does; the plugin's server emits `WS_PORT`, where the Phase 6 plan said it was
+  absent; `flush()` reads the timing setting on the network thread outside the lock that
+  `setTiming` writes it under.
+- *Implementer's decisions, the author's to overrule:* the server's `DEVICE_ID` is derived from a
+  random seed in the per-user registry settings file and the host application's name, since the
+  server is one per process and has no project to keep an identifier in, and two DAWs on one
+  machine share that file (the draft says "a UUID" for it, where it first said version 4); the
+  server's `CLOCK` declares `local` and no scheduling, since it applies a write on arrival and
+  cannot know what disciplines the system clock; no node is added to the server's namespace; the
+  time tag of a received bundle stays unused, since placing recorded automation by it needs an
+  agreement on the clock that no bench device offers; the missing send delay and the `WS_PORT`
+  line are left as the author's open items, and the unlocked read is fixed in 6b-5.
+
+---
+
 ## Phase 7 — AU, Linux, variants, installers · M
 
 **Goal:** the same session file opens in all three formats. PRD milestone 5.
@@ -1094,7 +1172,9 @@ this phase writes down what `kParamTitlesChanged` actually does there, in `docs/
 - `tools/conform`: one executable, `conform <host:port>` or `conform --browse`, runs C1–C7 and
   L1–L5 as the PRD defines them, prints the matrix row as Markdown and JSON, exits non-zero on
   any Core failure. C5 (path stability across reboot) takes a `--before`/`--after` pair of tree
-  snapshots. L5 reports the time, not just pass/fail.
+  snapshots. L5 reports the time, not just pass/fail. The two optional extensions' checks, X1 and
+  X2 of `docs/spec/extensions-draft-0.1.md`, run only against a device that declares them, and
+  never fail a Core or Live row (added 2026-11-10).
 - Run against: the plugin's own server, the mock device (with fixtures that fail each check on
   purpose, as the CLI's own test), WFS-DIY, XOA/Tight-WFS, the PRISM haptic floor controller,
   Holophonix, ossia score, Chataigne.
@@ -1168,3 +1248,6 @@ copyright holders (Pierre-Olivier Boulant, Julien Bayle), no new `HOST_INFO` fie
 with best-effort naming, record over LISTEN when declared and otherwise over a UDP port shown in
 the editor and configured on the device side, VST3 and AU first through JUCE's wrappers with our
 own CLAP shim in Phase 5b, five slot-count plugin IDs and the registry in a shared core library.
+
+Decided 2026-11-10: two optional extensions beside the profile (`DEVICE_ID`, `CLOCK`), the plugin
+their client and their server (Phase 6b); pull requests from that day on.

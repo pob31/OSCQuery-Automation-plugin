@@ -3,6 +3,9 @@
 The OSCQuery discovery profile (Core and Live) that the plugin is the reference client for.
 
 - [`core-profile-draft-0.1.md`](core-profile-draft-0.1.md): draft 0.1, 2026-11-04, out for review.
+- [`extensions-draft-0.1.md`](extensions-draft-0.1.md): draft 0.1, 2026-11-10, by Julien Bayle. Two
+  optional extensions, `DEVICE_ID` and `CLOCK`, outside the profile: a device passes Core and Live
+  without them, and the plugin uses them only when a device declares them.
 
 **Licence.** Everything in this folder is licensed under
 [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
