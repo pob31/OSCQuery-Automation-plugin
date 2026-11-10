@@ -1074,7 +1074,8 @@ timetags, and says both of itself, without asking anything of a device that decl
 - **Mock device**: extra `HOST_INFO` members given verbatim, so a test can build the honest
   device, the one that serves a key without declaring it, and two devices under one identifier.
 - **State chunk**: `devices[]` gains an optional `device_id`, written only when set; version 1
-  stands (the `path_pattern` and `instance` precedent), with its fixture in `tests/state/`.
+  stands (the `path_pattern` and `instance` precedent), with its fixture in `tests/state/`. (Built with a second optional
+  field, `timetags_by_hand`: the record says why.)
 - **Re-identification**: the identifier goes in front of the PRD's sequence and replaces nothing.
   At the last address, equal identifiers confirm the device even under a new `NAME` and different
   ones are a mismatch even under the same; over DNS-SD a device declaring the saved identifier is
@@ -1129,6 +1130,49 @@ Monitor; **6x-7** the bench report and this record.
   time tag of a received bundle stays unused, since placing recorded automation by it needs an
   agreement on the clock that no bench device offers; the missing send delay and the `WS_PORT`
   line are left as the author's open items, and the unlocked read is fixed in 6x-5.
+
+**Record, 2026-11-10 (built; the farm, CI and the DAW rows open).** Built in six commits on the
+branch `extensions-device-id-clock`, 6x-1 to 6x-6, each with its tests. Report:
+[`docs/bench/2026-11-10-phase6x-extensions.md`](bench/2026-11-10-phase6x-extensions.md).
+
+- *Done so far, measured on Windows (Debug), every suite passing under C and fr_FR:* the library
+  reads `DEVICE_ID` and `CLOCK` only when `EXTENSIONS` lists them and ignores a malformed one; its
+  server serves and lists what its options give; the mock serves extra `HOST_INFO` members,
+  declared or not; the chunk keeps `device_id`, written only when set; a device renamed since is
+  confirmed at its address and found elsewhere by its identifier; two devices sharing a NAME with
+  no identity leaf are told apart by it; two live devices under one identifier are unresolved
+  until pointed; another identifier under the right NAME is a mismatch and is never adopted; a
+  chunk saved without one learns it on the next save; a declared `SCHEDULING` sets the timetags
+  setting, a hand overrules it and a chunk does not; the plugin's server serves an identifier that
+  holds across a restart and a rename, and a clock that claims the least; a device with neither
+  extension leaves the status's old keys and the saved chunk as they were.
+- *Implementer's decisions while building, the author's to overrule:* **the identifier is learnt at
+  the first confirmation**, not when the device is added (the editor's device rows carry no
+  `HOST_INFO`), and a chunk's push does not replace one already learnt; **a pointed device gives
+  its own identifier**, whatever the chunk held; **a chunk field more than planned,
+  `timetags_by_hand`**, written only when true: without it a user who unticks a device that claims
+  to schedule would find it ticked again at every reload, since the device's word outranks a
+  chunk's value; **the seed of the server's identifier is a one-line file of its own**,
+  `<settings file>.server-id`, not a key of the settings file, which a test holds to being written
+  only when a setting changes and which, broken, must be left for its owner; **the identifier is a
+  UUID of version 8** (RFC 9562, of the application's own making: SHA-256 of the seed and the host
+  application's name); **a second device seen later under the identifier of the one in use is a
+  warning**, and the one in use stays; the candidate rows say "same DEVICE_ID" or "other
+  DEVICE_ID" and show the candidate's own NAME; the status gained `device_id`, `device_id_live`,
+  `timetags_origin`, `clock`, and on candidates `name`, `id_known`, `id_match`; `oscquery-dump`
+  prints both extensions.
+- *Found on the way:* the DNS-SD browser kept an earlier start's records across a restart, so the
+  Finder listed and probed devices long gone and a new one waited behind them (fixed: a start is a
+  fresh browse; the one change to a file copied from go.dot); a search adopts the first device it
+  sees, by identifier as by NAME, because DNS-SD never says it has finished; the retype case of
+  the stale tests raced the websocket (fixed in the test).
+- *The author's open items:* the send delay the PRD promises for a device with timetags off, which
+  does not exist; the `WS_PORT` line of the Phase 6 plan; a device seen on two interfaces, which is
+  two candidates under one identifier; and, with Julien Bayle and Jean-Michaël Celerier, the names
+  and the shape of the two keys, which sit in two constants of `lib/oscquery/oscquery/HostInfo.h`
+  and the `CLOCK` reader beside them.
+- *Still to fill:* CI on three platforms on the pull request, the farm, and the report's DAW rows
+  (WFS-DIY unchanged, two mocks in the editor, the timetags box, two DAWs on one machine).
 
 ---
 
