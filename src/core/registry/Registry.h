@@ -144,6 +144,14 @@ namespace oqa::core
         std::string serverAllow;           ///< who may write: "" loopback only, "any", or addresses separated by commas
         std::string serverName;            ///< "" for the default, "OSCQuery Automation @ <machine> (<host app>)"
 
+        /*  DNS-SD on the network (2026-11-10). False: the Finder neither browses
+            nor announces, and nothing of this plugin's goes to the mDNS group;
+            devices are added by typing host:port, and the server, still served,
+            is reached the same way. For a network where multicast is not
+            welcome, and for the validators, which load the plugin in hundreds
+            of processes at once (docs/bench/2026-11-10-mdns-flood.md). */
+        bool discoveryEnabled = true;
+
         juce::var toVar() const;
 
         /** Fields present in `v` replace this one's; the rest stay. */

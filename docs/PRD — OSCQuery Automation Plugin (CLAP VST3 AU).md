@@ -49,7 +49,7 @@ Discovery happens in the plugin editor, never in the audio thread, and only when
 **Finding devices**
 
 - Browse `_oscjson._tcp` via DNS-SD (mDNS) on all active interfaces. Show the `NAME` from `HOST_INFO`, host and port.
-- Manual entry fallback: host and port typed by the user. Required, because multicast often does not cross VLANs on show networks.
+- Manual entry fallback: host and port typed by the user. Required, because multicast often does not cross VLANs on show networks. DNS-SD can also be turned off whole in the global settings (`discovery_enabled`, added 2026-11-10): the plugin then neither browses nor announces its own server, and devices are typed. For a network where multicast is not welcome; found necessary the day the validators' hundreds of plugin processes flooded one (`docs/bench/2026-11-10-mdns-flood.md`).
 - Recent devices list, persisted in the plugin's global settings (not the session), keyed by `NAME` plus last known host:port.
 - Each discovered device is probed with `GET /?HOST_INFO` before it is listed. Devices that fail the probe show as unreachable, not hidden.
 

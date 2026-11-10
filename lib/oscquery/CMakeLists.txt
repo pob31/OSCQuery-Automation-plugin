@@ -69,6 +69,7 @@ add_library(oqa_oscquery STATIC
     oscquery/mdns/Mdns.cpp
     oscquery/mdns/MulticastJoin.h
     oscquery/mdns/MulticastJoin.cpp
+    oscquery/mdns/AnswerPacer.h
     oscquery/mdns/Discovery.h
     oscquery/mdns/Discovery.cpp
 

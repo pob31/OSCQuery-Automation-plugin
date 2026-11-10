@@ -1151,6 +1151,11 @@ repository, and the issue tracker is open.
   `docs/bench/` with the date and firmware.
 - **No typed address** anywhere in `src/`; addresses appear only in fixtures.
 - **No *(proposed)* spec clause implemented without a recorded yes.**
+- **A validator runs the plugin with DNS-SD off** (added 2026-11-10): pluginval and clap-validator
+  load the real plugin, clap-validator in a couple of hundred processes at once, and with its
+  server announced that flooded the network with multicast DNS and took a phone's hotspot down
+  (`docs/bench/2026-11-10-mdns-flood.md`). CI and `scripts/farm-check.sh` name a copy of
+  `tests/validators.registry.json` in `OQA_SETTINGS_FILE`; a run by hand does the same.
 - Every failure visible in the editor, never silent (PRD *Access control and failure states*); a
   new failure mode gets a row in that table before it gets code.
 

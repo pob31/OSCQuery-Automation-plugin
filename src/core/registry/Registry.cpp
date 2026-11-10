@@ -213,6 +213,7 @@ namespace oqa::core
         o->setProperty ("server_osc_port", serverOscPort);
         o->setProperty ("server_allow", juce::String (serverAllow));
         o->setProperty ("server_name", juce::String (serverName));
+        o->setProperty ("discovery_enabled", discoveryEnabled);
         return juce::var (o);
     }
 
@@ -235,6 +236,7 @@ namespace oqa::core
         if (v.hasProperty ("server_osc_port"))    serverOscPort = std::clamp (static_cast<int> (v["server_osc_port"]), 0, 65535);
         if (v.hasProperty ("server_allow"))       serverAllow = v["server_allow"].toString().trim().toStdString();
         if (v.hasProperty ("server_name"))        serverName = v["server_name"].toString().trim().toStdString();
+        if (v.hasProperty ("discovery_enabled"))  discoveryEnabled = static_cast<bool> (v["discovery_enabled"]);
     }
 
     //==============================================================================
@@ -2061,6 +2063,46 @@ namespace oqa::core
                     startThread (Priority::normal);
             }
 
+            /*  The options the Finder starts with: the ones at hand, or, with
+                DNS-SD turned off in the settings, the same with no browsing
+                and nothing announced. Typed entries are still probed. Under
+                finderLock. */
+            oscquery::Finder::Options effectiveOptions() const
+            {
+                auto options = finderOptions;
+
+                if (! discovery)
+                {
+                    options.browse = false;
+                    options.discovery.announceAs.clear();
+                }
+
+                return options;
+            }
+
+            /** DNS-SD on or off (the settings'); the Finder, if it runs, starts again with it. */
+            void setDiscovery (bool enabled)
+            {
+                const std::lock_guard<std::mutex> guard (finderLock);
+
+                if (discovery == enabled)
+                    return;
+
+                discovery = enabled;
+
+                if (finderRunning)
+                {
+                    finder.stop();
+                    finderRunning = finder.start (effectiveOptions());
+                }
+            }
+
+            bool discoveryOn() const
+            {
+                const std::lock_guard<std::mutex> guard (finderLock);
+                return discovery;
+            }
+
             /** Start the Finder with the options at hand; a no-op once it runs. Any thread but under no registry lock. */
             void ensureFinder()
             {
@@ -2069,7 +2111,7 @@ namespace oqa::core
                 if (finderRunning)
                     return;
 
-                finderRunning = finder.start (finderOptions);
+                finderRunning = finder.start (effectiveOptions());
             }
 
             void addManual (const std::string& host, int port)
@@ -2092,7 +2134,7 @@ namespace oqa::core
                 if (finderRunning)
                 {
                     finder.stop();
-                    finderRunning = finder.start (finderOptions);
+                    finderRunning = finder.start (effectiveOptions());
                 }
             }
 
@@ -2113,9 +2155,13 @@ namespace oqa::core
                     if (finderRunning)
                     {
                         finder.stop();
-                        finderRunning = finder.start (finderOptions);
+                        finderRunning = finder.start (effectiveOptions());
                         return;
                     }
+
+                    //  Nothing to announce with DNS-SD off: the Finder is not started for it.
+                    if (! discovery)
+                        return;
                 }
 
                 if (! name.empty())
@@ -2194,6 +2240,7 @@ namespace oqa::core
             oscquery::Finder finder;
             oscquery::Finder::Options finderOptions;
             bool finderRunning = false;
+            bool discovery = true;              // under finderLock: the settings' discovery_enabled
             std::string announceName;           // under finderLock
             int announceHttpPort = 0, announceOscPort = 0;
         };
@@ -2521,6 +2568,7 @@ namespace oqa::core
         }
 
         impl->resolver = std::make_unique<Impl::Resolver> (*impl);
+        impl->resolver->setDiscovery (impl->settings.discoveryEnabled);
 
         server::PluginServer::Hooks hooks;
         hooks.processStatus = [this] { return status(); };
@@ -3356,7 +3404,8 @@ namespace oqa::core
             {
                 auto server = impl->server->status();
                 server.getDynamicObject()->setProperty ("enabled", impl->settings.serverEnabled);
-                server.getDynamicObject()->setProperty ("announcing", impl->server->isRunning() && impl->resolver != nullptr && impl->resolver->running());
+                server.getDynamicObject()->setProperty ("announcing", impl->server->isRunning() && impl->resolver != nullptr
+                                                                          && impl->resolver->running() && impl->resolver->discoveryOn());
                 o->setProperty ("server", server);
             }
         }
@@ -3426,6 +3475,9 @@ namespace oqa::core
             for (auto& [key, entry] : impl->devices)
                 entry->setSettings (settings);
         }
+
+        if (impl->resolver != nullptr)
+            impl->resolver->setDiscovery (settings.discoveryEnabled);
 
         impl->reconcileReceiver();
         reconcileServer();

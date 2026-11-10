@@ -15,7 +15,8 @@
 
     Origin: go.dot src/wfg/engine/oscquery/Discovery.cpp at 1c8aaa0a, namespace and
     includes renamed; instanceName() removed; the host label's prefix and the
-    5353 problem text no longer name Go.dot.
+    5353 problem text no longer name Go.dot. 2026-11-10: answer(), ask() and
+    sendToGroup() paced by an AnswerPacer (see AnswerPacer.h for why).
 */
 
 #include <oscquery/mdns/Discovery.h>
@@ -130,6 +131,18 @@ namespace oqa::oscquery
     Discovery::~Discovery()
     {
         stop();
+    }
+
+    namespace
+    {
+        /*  One record as the pacer knows it: the same text for the same record
+            whoever sends it. The port is part of an SRV's, so two servers under
+            one name are two records. */
+        std::string pacerKey (const mdns::Record& record)
+        {
+            return keyOf (record.name) + "|" + std::to_string (record.type) + "|" + keyOf (record.target)
+                 + (record.type == mdns::type::srv ? "|" + std::to_string (record.port) : std::string());
+        }
     }
 
     bool Discovery::start (Options optionsToUse)
@@ -303,7 +316,8 @@ namespace oqa::oscquery
     {
         const auto size = static_cast<int> (bytes.size());
 
-        if (onGroup)
+        //  Within the budget of datagrams to the group, or not at all (AnswerPacer.h).
+        if (onGroup && pacer.spend (Clock::now()))
         {
             if (interfaces.empty())
                 socket->write (mdns::group, mdns::port, bytes.data(), size);
@@ -380,6 +394,12 @@ namespace oqa::oscquery
         }
 
         sendToGroup (mdns::encodeResponse (answers, addressRecords (unique, false)));
+
+        //  Just said: not said again to a question arriving within the second.
+        const auto now = Clock::now();
+
+        for (const auto& each : answers)
+            pacer.heard (pacerKey (each), now);
     }
 
     /*  A QUESTION ABOUT GO.DOT, ANSWERED (ARU, ASA): the PTR of a service it
@@ -480,7 +500,22 @@ namespace oqa::oscquery
             return;
         }
 
-        sendToGroup (mdns::encodeResponse (answers, additionals));
+        /*  To the group: after a short wait chosen at random, unless another
+            responder says the same meanwhile, and never the same record twice
+            within a second (RFC 6762 §6, §7.4; AnswerPacer.h). */
+        std::vector<std::string> keys;
+
+        for (const auto& each : answers)
+            keys.push_back (pacerKey (each));
+
+        (void) pacer.want (std::move (keys), mdns::encodeResponse (answers, additionals), Clock::now(),
+                           std::chrono::milliseconds (20 + delays.nextInt (101)));
+    }
+
+    void Discovery::sendDueAnswers (Clock::time_point now)
+    {
+        for (const auto& bytes : pacer.due (now))
+            sendToGroup (bytes);
     }
 
     std::string Discovery::preferred (const std::vector<std::string>& addresses) const
@@ -509,7 +544,7 @@ namespace oqa::oscquery
         const auto bytes = mdns::encodeQuery (asked);
         const auto size = static_cast<int> (bytes.size());
 
-        if (toGroup && options.port == mdns::port)
+        if (toGroup && options.port == mdns::port && pacer.spend (Clock::now()))
         {
             if (onGroup && ! interfaces.empty())
             {
@@ -558,6 +593,7 @@ namespace oqa::oscquery
             }
 
             followUp (now);
+            sendDueAnswers (now);
 
             //  ANNOUNCED TWICE AT THE START, a second apart (RFC 6762 §8.3).
             if (announcing() && onGroup && announcementsLeft > 0 && now >= nextAnnouncement)
@@ -579,7 +615,14 @@ namespace oqa::oscquery
                 lastInterfaces = now;
             }
 
-            if (socket->waitUntilReady (true, 100) != 1)
+            //  Not past the moment a waiting answer is due.
+            int waitMs = 100;
+
+            if (const auto due = pacer.next())
+                waitMs = static_cast<int> (std::clamp<std::int64_t> (
+                    std::chrono::duration_cast<std::chrono::milliseconds> (*due - Clock::now()).count() + 1, 1, 100));
+
+            if (socket->waitUntilReady (true, waitMs) != 1)
                 continue;
 
             juce::String fromIp;
@@ -609,6 +652,12 @@ namespace oqa::oscquery
 
         const auto now = Clock::now();
         const auto records = message->records();
+
+        //  What a responder just said to the group, ours looped back included, is said (§7.4).
+        if (announcing() && fromPort == mdns::port)
+            for (const auto& record : message->answers)
+                if (record.ttl > 0)
+                    pacer.heard (pacerKey (record), now);
 
         //  The instances first, so an SRV in the same message finds its own.
         for (const auto& record : records)

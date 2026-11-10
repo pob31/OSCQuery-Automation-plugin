@@ -40,6 +40,13 @@ env:
   # the Linux and macOS zips wrap a tarball (named 0.3.2 by the release's own tooling).
   CLAP_VALIDATOR_URL: https://github.com/free-audio/clap-validator/releases/download/0.4.1
   CLAP_VALIDATOR_BUILD: clap-validator-0.4.1-127-g152b982
+
+# THE VALIDATORS RUN THE PLUGIN WITH DNS-SD OFF (2026-11-10). pluginval and clap-validator load
+# the real plugin, which reads the per-user settings: its server on, announced over multicast
+# DNS, in a couple of hundred processes at once for clap-validator. That sent 11,600 multicast
+# datagrams in a second from one machine and took a phone's hotspot down
+# (docs/bench/2026-11-10-mdns-flood.md). Each validator step copies tests/validators.registry.json
+# (the server still on, discovery off) and names the copy in OQA_SETTINGS_FILE.
   CLAP_DIR: src/shims/clap/oqa_clap_artefacts/Release
   CLAP_NAME: OSCQuery Automation.clap
 
@@ -134,6 +141,8 @@ jobs:
 
       - name: pluginval, strictness 5
         run: |
+          cp tests/validators.registry.json "$RUNNER_TEMP/oqa-validators.json"
+          export OQA_SETTINGS_FILE="$RUNNER_TEMP/oqa-validators.json"
           curl -sSL -o pluginval.zip "$PLUGINVAL_URL/pluginval_Linux.zip"
           unzip -q pluginval.zip -d pluginval
           chmod +x pluginval/pluginval
@@ -144,6 +153,8 @@ jobs:
 
       - name: clap-validator
         run: |
+          cp tests/validators.registry.json "$RUNNER_TEMP/oqa-validators.json"
+          export OQA_SETTINGS_FILE="$RUNNER_TEMP/oqa-validators.json"
           curl -sSL -o clap-validator.zip "$CLAP_VALIDATOR_URL/$CLAP_VALIDATOR_BUILD-ubuntu-22.04.zip"
           unzip -q clap-validator.zip -d clap-validator
           for t in clap-validator/*.tar.gz; do [ -f "$t" ] && tar -xzf "$t" -C clap-validator; done
@@ -213,6 +224,8 @@ jobs:
 
       - name: pluginval, strictness 5 (VST3)
         run: |
+          cp tests/validators.registry.json "$RUNNER_TEMP/oqa-validators.json"
+          export OQA_SETTINGS_FILE="$RUNNER_TEMP/oqa-validators.json"
           curl -sSL -o pluginval.zip "$PLUGINVAL_URL/pluginval_macOS.zip"
           unzip -q pluginval.zip -d pluginval
           ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate-in-process \
@@ -222,6 +235,8 @@ jobs:
 
       - name: clap-validator
         run: |
+          cp tests/validators.registry.json "$RUNNER_TEMP/oqa-validators.json"
+          export OQA_SETTINGS_FILE="$RUNNER_TEMP/oqa-validators.json"
           curl -sSL -o clap-validator.zip "$CLAP_VALIDATOR_URL/$CLAP_VALIDATOR_BUILD-macos-universal.zip"
           unzip -q clap-validator.zip -d clap-validator
           for t in clap-validator/*.tar.gz; do [ -f "$t" ] && tar -xzf "$t" -C clap-validator; done
@@ -265,6 +280,8 @@ jobs:
       - name: pluginval, strictness 5
         shell: bash
         run: |
+          cp tests/validators.registry.json "$RUNNER_TEMP/oqa-validators.json"
+          export OQA_SETTINGS_FILE="$RUNNER_TEMP/oqa-validators.json"
           curl -sSL -o pluginval.zip "$PLUGINVAL_URL/pluginval_Windows.zip"
           unzip -q pluginval.zip -d pluginval
           ./pluginval/pluginval.exe --strictness-level 5 --validate-in-process \
@@ -275,6 +292,8 @@ jobs:
       - name: clap-validator
         shell: bash
         run: |
+          cp tests/validators.registry.json "$RUNNER_TEMP/oqa-validators.json"
+          export OQA_SETTINGS_FILE="$RUNNER_TEMP/oqa-validators.json"
           curl -sSL -o clap-validator.zip "$CLAP_VALIDATOR_URL/$CLAP_VALIDATOR_BUILD-windows.zip"
           unzip -q clap-validator.zip -d clap-validator
           CV=$(find clap-validator -type f -name 'clap-validator*.exe' | head -1)
