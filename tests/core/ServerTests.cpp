@@ -33,9 +33,12 @@
 
 #include <core/Instance.h>
 #include <core/registry/Registry.h>
+#include <core/registry/SettingsFile.h>
+#include <core/server/PluginServer.h>
 #include <core/server/ServerNamespace.h>
 
 #include <oscquery/Device.h>
+#include <oscquery/HostInfo.h>
 #include <oscquery/tree/Tree.h>
 
 #include <mutex>
@@ -321,4 +324,98 @@ TEST_CASE ("plugin server: a pinned HTTP port already in use is an error in the 
     REQUIRE (waitUntil ([] { return ServerOn::port() == 0; }));
     CHECK (ServerOn::serverStatus().getProperty ("running", true) == juce::var (false));
     CHECK (ServerOn::serverStatus().getProperty ("announcing", true) == juce::var (false));
+}
+
+//==============================================================================
+//  Phase 6x-6: the server says of itself what it reads of others
+//  (docs/spec/extensions-draft-0.1.md).
+TEST_CASE ("plugin server: it serves and declares a DEVICE_ID that holds across a restart and a rename, and a CLOCK that claims the least")
+{
+    ServerOn on;
+
+    std::string error;
+    const auto first = parseHostInfo (juce::JSON::toString (get ("/?HOST_INFO")).toStdString(), error);
+    REQUIRE (first.has_value());
+
+    /*  Declared, both, and read by the library as any client would. */
+    CHECK (first->has ("DEVICE_ID"));
+    CHECK (first->has ("CLOCK"));
+    REQUIRE (first->deviceId.has_value());
+    CHECK (first->deviceId->size() == 36);                                   // a UUID in its dashed form
+    CHECK ((*first->deviceId)[14] == '8');                                    // of the application's own making (RFC 9562, version 8)
+    REQUIRE (first->clock.has_value());
+    CHECK (first->clock->source == "local");
+    CHECK_FALSE (first->clock->scheduling);
+    CHECK_FALSE (first->clock->domain.has_value());
+
+    //  The status says the same identifier, for the Monitor's server line.
+    CHECK (ServerOn::serverStatus().getProperty ("device_id", "").toString().toStdString() == *first->deviceId);
+
+    //  It is what the seed and this executable's name give, and nothing else.
+    const auto seedFile = SettingsFile::serverSeedFile (Registry::shared().settingsFile());
+    REQUIRE (seedFile.existsAsFile());
+    const auto seed = seedFile.loadFileAsString().trim().toStdString();
+    REQUIRE_FALSE (seed.empty());
+    CHECK (SettingsFile::serverSeed (Registry::shared().settingsFile()) == seed);      // read, not made again
+    CHECK (*first->deviceId == oqa::core::server::PluginServer::deviceIdFor (seed, oqa::core::server::PluginServer::hostApplicationName()));
+
+    /*  Renamed (which restarts it, on another port): the same identifier. */
+    auto renamed = Registry::shared().settings();
+    renamed.serverName = "Renamed For The Test";
+    Registry::shared().setSettings (renamed);
+    REQUIRE (waitUntil ([] { return ServerOn::serverStatus().getProperty ("name", "").toString() == "Renamed For The Test" && ServerOn::port() > 0; }));
+
+    const auto second = parseHostInfo (juce::JSON::toString (get ("/?HOST_INFO")).toStdString(), error);
+    REQUIRE (second.has_value());
+    CHECK (second->name == "Renamed For The Test");
+    CHECK (second->deviceId == first->deviceId);
+
+    /*  Off and on again: the same. */
+    auto off = Registry::shared().settings();
+    off.serverEnabled = false;
+    Registry::shared().setSettings (off);
+    REQUIRE (waitUntil ([] { return ! static_cast<bool> (ServerOn::serverStatus().getProperty ("running", true)); }));
+
+    auto back = Registry::shared().settings();
+    back.serverEnabled = true;
+    Registry::shared().setSettings (back);
+    REQUIRE (waitUntil ([] { return static_cast<bool> (ServerOn::serverStatus().getProperty ("running", false)) && ServerOn::port() > 0; }));
+
+    const auto third = parseHostInfo (juce::JSON::toString (get ("/?HOST_INFO")).toStdString(), error);
+    REQUIRE (third.has_value());
+    CHECK (third->deviceId == first->deviceId);
+}
+
+TEST_CASE ("plugin server: the DEVICE_ID is one per seed and per host application, and none without a seed")
+{
+    using oqa::core::server::PluginServer;
+
+    const auto reaper = PluginServer::deviceIdFor ("3f0a6c1e-1111-4222-8333-444455556666", "reaper");
+    const auto live   = PluginServer::deviceIdFor ("3f0a6c1e-1111-4222-8333-444455556666", "Ableton Live 12 Suite");
+    const auto other  = PluginServer::deviceIdFor ("9b7d2e40-aaaa-4bbb-8ccc-ddddeeeeffff", "reaper");
+
+    CHECK (reaper == PluginServer::deviceIdFor ("3f0a6c1e-1111-4222-8333-444455556666", "reaper"));   // the same in, the same out
+    CHECK (reaper != live);            // two DAWs sharing one settings file
+    CHECK (reaper != other);           // two users, or two machines
+    CHECK (reaper.size() == 36);
+    CHECK (reaper[14] == '8');
+    CHECK (std::string ("89ab").find (reaper[19]) != std::string::npos);
+    CHECK (PluginServer::deviceIdFor ("", "reaper").empty());
+
+    /*  The seed is a file of its own beside the settings file: made once, read
+        after that, and not a setting (the settings file is not written for it). */
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                            .getChildFile ("oqa-seed-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
+    const auto settingsFile = folder.getChildFile ("registry.json");
+
+    CHECK (SettingsFile::serverSeedFile (settingsFile) == folder.getChildFile ("registry.json.server-id"));
+    CHECK (SettingsFile::serverSeed ({}).empty());                       // no settings file at all, no seed
+
+    const auto made = SettingsFile::serverSeed (settingsFile);
+    CHECK (made.size() == 36);
+    CHECK (SettingsFile::serverSeedFile (settingsFile).existsAsFile());
+    CHECK_FALSE (settingsFile.existsAsFile());
+    CHECK (SettingsFile::serverSeed (settingsFile) == made);
+
+    folder.deleteRecursively();
 }

@@ -56,5 +56,16 @@ namespace oqa::core
 
         /** Write `settings` as JSON, making the folder; false with the reason. */
         static bool save (const juce::File& file, const juce::var& settings, std::string& error);
+
+        /*  WHAT THE PLUGIN'S SERVER DERIVES ITS DEVICE_ID FROM (Phase 6x-6): a
+            random UUID in a one-line file of its own beside the settings file
+            ("<settings file's name>.server-id"), read if it is there and made
+            if it is not. Apart from the settings on purpose: it is not one,
+            nobody sets it, and the settings file is only ever written when a
+            setting changes (a broken one is left for its owner to mend). When
+            the file cannot be written the seed returned still serves, for
+            this run. Empty only for no settings file at all. */
+        static juce::File serverSeedFile (const juce::File& settingsFile);
+        static std::string serverSeed (const juce::File& settingsFile);
     };
 }

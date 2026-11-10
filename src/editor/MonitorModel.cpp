@@ -130,6 +130,11 @@ namespace oqa::editor
 
         words << "; " << juce::String (connections) << " connection" << (connections == 1 ? "" : "s")
               << ", " << juce::String (acceptedWrites) << " writes accepted, " << juce::String (refusedWrites) << " refused";
+
+        //  The identifier it declares (6x-6), for telling two DAWs' servers apart.
+        if (deviceId.isNotEmpty())
+            words << "; DEVICE_ID " << deviceId;
+
         return words;
     }
 
@@ -234,6 +239,7 @@ namespace oqa::editor
             m.server.announcing = static_cast<bool> (s.getProperty ("announcing", false));
             m.server.name = s.getProperty ("name", "").toString();
             m.server.error = s.getProperty ("error", "").toString();
+            m.server.deviceId = s.getProperty ("device_id", "").toString();
             m.server.port = static_cast<int> (s.getProperty ("port", 0));
             m.server.oscPort = static_cast<int> (s.getProperty ("osc_port", 0));
             m.server.connections = static_cast<int> (s.getProperty ("connections", 0));

@@ -97,7 +97,7 @@ namespace oqa::editor
         struct Server
         {
             bool present = false, enabled = false, running = false, announcing = false;
-            juce::String name, error;
+            juce::String name, error, deviceId;
             int port = 0, oscPort = 0, connections = 0;
             juce::int64 refusedWrites = 0, acceptedWrites = 0;
 

@@ -2261,6 +2261,7 @@ namespace oqa::core
         /*  The settings on disk (6a-1): read once here, written on every
             setSettings; what went wrong, if anything, for the status. */
         juce::File settingsFile;
+        std::string serverSeed;                 // what the server's DEVICE_ID is derived from (6x-6); the server's thread of control only
         bool settingsLoaded = false;
         std::string settingsFileError;
         std::map<std::string, std::unique_ptr<DeviceEntry>> devices;
@@ -2845,6 +2846,16 @@ namespace oqa::core
 
             if (wanted.serverEnabled)
             {
+                /*  What the server's DEVICE_ID is derived from (6x-6): read
+                    from its own small file beside the settings, made the first
+                    time a server starts for this user. Not a setting, so not
+                    in the settings file, which is written only when a setting
+                    changes. Unwritable, it lasts this run and no longer. */
+                if (impl->serverSeed.empty())
+                    impl->serverSeed = SettingsFile::serverSeed (impl->settingsFile);
+
+                impl->server->setDeviceSeed (impl->serverSeed);
+
                 std::string error;
                 (void) impl->server->start (wanted, error);       // a failure stays in the server's status
             }
