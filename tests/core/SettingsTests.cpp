@@ -27,6 +27,8 @@
 #include <doctest/doctest.h>
 
 #include "TestSupport.h"
+#include "MockDevice.h"
+#include "support/WsTestClient.h"
 
 #include <core/registry/Registry.h>
 #include <core/registry/SettingsFile.h>
@@ -151,4 +153,66 @@ TEST_CASE ("settings: the shared registry of this test run reads the test run's 
     CHECK (file.getFileName().startsWith ("oqa-tests-"));
     CHECK (file != SettingsFile::defaultFile());
     CHECK (SettingsFile::defaultFile().getFileName() == "OSCQuery Automation Plugin.registry.json");
+}
+
+//==============================================================================
+//  2026-11-10: DNS-SD can be turned off (docs/bench/2026-11-10-mdns-flood.md).
+TEST_CASE ("settings: with discovery off the server is served and not announced, a typed device is still probed, and the key round-trips")
+{
+    RegistrySettings defaults;
+    CHECK (defaults.discoveryEnabled);
+    CHECK (defaults.toVar().getProperty ("discovery_enabled", false) == juce::var (true));
+
+    RegistrySettings read;
+    read.applyVar (juce::JSON::parse ("{\"discovery_enabled\": false}"));
+    CHECK_FALSE (read.discoveryEnabled);
+    CHECK (read.serverEnabled);                         // the rest stays
+
+    /*  A registry of the test's own, started from a file that turns discovery
+        off and the server on: what a validator's run is given. */
+    TempFile temp;
+    temp.file.getParentDirectory().createDirectory();
+    temp.file.replaceWithText ("{ \"server_enabled\": true, \"discovery_enabled\": false }");
+
+    oqatest::MockDevice mock;
+    REQUIRE (mock.loadTree (juce::JSON::parse (oqatest::fixture ("trees/generic-device.json"))));
+    REQUIRE (mock.start());
+
+    Registry a (temp.file);
+    CHECK_FALSE (a.settings().discoveryEnabled);
+
+    const auto server = [&a] { return a.status().getProperty ("server", {}); };
+    REQUIRE (oqatest::waitUntil ([&] { return static_cast<bool> (server().getProperty ("running", false)); }));
+    CHECK_FALSE (static_cast<bool> (server().getProperty ("announcing", true)));
+
+    //  Nothing started the Finder to announce the server.
+    CHECK_FALSE (static_cast<bool> (a.status().getProperty ("finder_running", true)));
+
+    /*  A device typed by hand is found all the same. */
+    a.finderAddManual ("127.0.0.1", mock.httpPort());
+
+    REQUIRE (oqatest::waitUntil ([&]
+    {
+        const auto status = a.status();                 // held: the list below lives in it
+
+        if (const auto* found = status.getProperty ("found", {}).getArray())
+            for (const auto& f : *found)
+                if (static_cast<int> (f.getProperty ("port", 0)) == mock.httpPort())
+                    return static_cast<bool> (f.getProperty ("reachable", false));
+
+        return false;
+    }, 15000));
+
+    CHECK (static_cast<bool> (a.status().getProperty ("finder_running", false)));
+    CHECK_FALSE (static_cast<bool> (server().getProperty ("announcing", true)));      // running, and still silent
+
+    /*  Turned on while running, then off again: the status follows. */
+    auto s = a.settings();
+    s.discoveryEnabled = true;
+    s.serverEnabled = false;                            // nothing of this test's goes to the real group
+    a.setSettings (s);
+    CHECK (a.settings().discoveryEnabled);
+    CHECK (temp.file.loadFileAsString().contains ("\"discovery_enabled\": true"));
+
+    a.shutdown();
 }

@@ -293,6 +293,7 @@ namespace oqa::editor
             addNumber ("server_osc_port", "Server OSC port", "The server's own UDP endpoint for OSC writes; 0 for ephemeral.");
             addText ("server_allow", "Server writes from", "Who may write: empty for this machine only, 'any', or addresses separated by commas.");
             addText ("server_name", "Server NAME", "Empty for 'OSCQuery Automation @ <machine> (<host app>)'.");
+            addToggle ("discovery_enabled", "Find devices over DNS-SD", "Browse the network for OSCQuery devices and announce this plugin's server. Off, nothing goes to the multicast DNS group: devices are added by typing host:port.");
             addToggle ("direct_send", "Direct send (bench only)", "Encode and send on the audio thread. For a bench measurement; it allocates and blocks where a plugin must not.");
 
             clearRecents.setButtonText ("Clear recents");

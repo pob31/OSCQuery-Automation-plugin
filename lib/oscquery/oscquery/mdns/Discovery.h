@@ -16,7 +16,9 @@
     Origin: go.dot src/wfg/engine/oscquery/Discovery.h at 1c8aaa0a, namespace
     oqa::oscquery; instanceName() (Go.dot's own naming) removed; Options gains
     hostLabelPrefix for the "godot-" host label. Its comments still say Go.dot
-    where they mean the announcing program.
+    where they mean the announcing program. 2026-11-10: multicast answers and
+    questions go through an AnswerPacer (a delay, duplicate suppression, one
+    second's rest per record, a budget), which go.dot's do not.
 */
 
 #pragma once
@@ -63,7 +65,10 @@
     moved.
 */
 
+#include <oscquery/mdns/AnswerPacer.h>
 #include <oscquery/mdns/Mdns.h>
+
+#include <juce_core/juce_core.h>
 
 #include <atomic>
 #include <chrono>
@@ -184,6 +189,7 @@ namespace oqa::oscquery
         bool announcing() const noexcept { return ! options.announceAs.empty(); }
         std::vector<mdns::Record> addressRecords (std::uint32_t ttl, bool withLoopback) const;
         void answer (const mdns::Message& asked, const std::string& fromIp, int fromPort);
+        void sendDueAnswers (Clock::time_point now);
         void announce (std::uint32_t ttl);
         void sendToGroup (const std::vector<std::uint8_t>& bytes);
         std::string preferred (const std::vector<std::string>& addresses) const;
@@ -194,6 +200,12 @@ namespace oqa::oscquery
         std::vector<std::string> interfaces;
         std::vector<std::string> ownAddresses;
         bool onGroup = false;
+
+        /*  When a multicast answer may go out, and the budget of datagrams to
+            the group (OSCQuery Automation Plugin, 2026-11-10; not in go.dot):
+            see AnswerPacer.h for the flood this ends. The browser's thread. */
+        mdns::AnswerPacer pacer;
+        juce::Random delays;
 
         std::map<std::string, Instance> instances;     ///< by the instance's name, lower case
         std::map<std::string, Host> hosts;             ///< by the host's name, lower case

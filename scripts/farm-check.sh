@@ -49,6 +49,13 @@ ls "$ART"
 VST="$ART/VST3/OSCQuery Automation 32.vst3"
 MONITOR="build/dev/src/shims/juce/oqa_plugin_monitor_artefacts/Release/VST3/OSCQuery Automation Monitor.vst3"
 
+# THE VALIDATORS RUN THE PLUGIN WITH DNS-SD OFF (2026-11-10): they load the real plugin, in a
+# couple of hundred processes at once for clap-validator, and with its server announced over
+# multicast DNS that flooded the network this machine is on (docs/bench/2026-11-10-mdns-flood.md).
+# The server stays on; the settings are a copy, so the user's own file is not read or written.
+cp tests/validators.registry.json ../farm-oqa-validators.registry.json
+export OQA_SETTINGS_FILE="$(cd .. && pwd)/farm-oqa-validators.registry.json"
+
 step "pluginval 1.0.4, strictness 5"
 rm -rf ../pluginval && mkdir ../pluginval
 if [ "$OS" = Darwin ]; then
