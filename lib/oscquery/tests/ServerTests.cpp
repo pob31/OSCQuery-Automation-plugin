@@ -416,3 +416,45 @@ TEST_CASE ("server: an HTTP port already in use is a start that fails with the r
     CHECK (fourth.oscPort() != first.server.oscPort());
     CHECK (fourth.isRunning());
 }
+
+//==============================================================================
+//  The two optional extensions (docs/spec/extensions-draft-0.1.md; devplan 6x-1).
+TEST_CASE ("server extensions: DEVICE_ID and CLOCK are served and declared together, and neither appears unasked")
+{
+    //  Unasked: HOST_INFO is what it was.
+    {
+        Served s;
+        const auto info = juce::JSON::parse (juce::String (oqatest::get (s.server.httpPort(), "/?HOST_INFO").body));
+        CHECK_FALSE (info.hasProperty ("DEVICE_ID"));
+        CHECK_FALSE (info.hasProperty ("CLOCK"));
+        CHECK_FALSE (info.getProperty ("EXTENSIONS", {}).hasProperty ("DEVICE_ID"));
+        CHECK_FALSE (info.getProperty ("EXTENSIONS", {}).hasProperty ("CLOCK"));
+    }
+
+    OscQueryServer server;
+    OscQueryServer::Options options;
+    options.name = "Served X";
+    options.extensions = { "ACCESS", "VALUE", "TYPE" };           // the owner lists neither: the server does
+    options.allow = "any";
+    options.deviceId = "6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47";
+    options.clock = oqa::oscquery::ClockInfo { "local", std::nullopt, false };
+
+    std::string error;
+    REQUIRE_MESSAGE (server.start (options, {}, error), error);
+
+    const auto reply = oqatest::get (server.httpPort(), "/?HOST_INFO");
+    REQUIRE (reply.status == 200);
+
+    //  Read back by the library's own parser, as a client would.
+    const auto info = oqa::oscquery::parseHostInfo (reply.body, error);
+    REQUIRE (info.has_value());
+    CHECK (info->has ("DEVICE_ID"));
+    CHECK (info->has ("CLOCK"));
+    CHECK (info->deviceId == options.deviceId);
+    REQUIRE (info->clock.has_value());
+    CHECK (*info->clock == *options.clock);
+    CHECK (info->meetsC1());
+    CHECK (info->has ("ACCESS"));
+
+    server.stop();
+}

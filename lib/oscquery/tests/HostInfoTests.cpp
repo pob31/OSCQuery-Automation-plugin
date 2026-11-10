@@ -169,3 +169,128 @@ TEST_CASE ("host info: a device missing the Core fields is still read, and says 
     CHECK_FALSE (parseHostInfo (std::string_view ("{ not json"), error).has_value());
     CHECK (error.find ("JSON") != std::string::npos);
 }
+
+//==============================================================================
+//  The two optional extensions (docs/spec/extensions-draft-0.1.md; devplan 6x-1).
+TEST_CASE ("host info: DEVICE_ID and CLOCK are read when EXTENSIONS declares them")
+{
+    std::string error;
+
+    const auto info = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP",
+        "DEVICE_ID": " 6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47 ",
+        "CLOCK": { "SOURCE": "PTP", "DOMAIN": 0, "SCHEDULING": true },
+        "EXTENSIONS": { "LISTEN": true, "DEVICE_ID": true, "CLOCK": true } })"), error);
+    INFO (error);
+    REQUIRE (info.has_value());
+
+    REQUIRE (info->deviceId.has_value());
+    CHECK (*info->deviceId == "6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47");
+
+    REQUIRE (info->clock.has_value());
+    CHECK (info->clock->source == "ptp");
+    REQUIRE (info->clock->domain.has_value());
+    CHECK (*info->clock->domain == "0");
+    CHECK (info->clock->scheduling);
+
+    //  Nothing else moved.
+    CHECK (info->meetsC1());
+    CHECK (info->has ("LISTEN"));
+
+    //  EXTENSIONS as a list declares them just as well.
+    const auto listed = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP",
+        "DEVICE_ID": "abc", "CLOCK": { "SOURCE": "local" },
+        "EXTENSIONS": ["DEVICE_ID", "CLOCK"] })"), error);
+    REQUIRE (listed.has_value());
+    CHECK (listed->deviceId == std::optional<std::string> ("abc"));
+    REQUIRE (listed->clock.has_value());
+    CHECK (listed->clock->source == "local");
+    CHECK_FALSE (listed->clock->domain.has_value());
+    CHECK_FALSE (listed->clock->scheduling);           // absent claims nothing
+}
+
+TEST_CASE ("host info: a DEVICE_ID or CLOCK that EXTENSIONS does not declare is not read")
+{
+    std::string error;
+
+    //  Present, not declared: somebody else's keys. They stay in `raw`.
+    const auto undeclared = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP",
+        "DEVICE_ID": "abc", "CLOCK": { "SOURCE": "ptp", "SCHEDULING": true },
+        "EXTENSIONS": { "LISTEN": true } })"), error);
+    REQUIRE (undeclared.has_value());
+    CHECK_FALSE (undeclared->deviceId.has_value());
+    CHECK_FALSE (undeclared->clock.has_value());
+    CHECK (undeclared->raw["DEVICE_ID"].toString() == "abc");
+
+    //  Declared false is not declared.
+    const auto declaredFalse = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP",
+        "DEVICE_ID": "abc",
+        "EXTENSIONS": { "DEVICE_ID": false } })"), error);
+    REQUIRE (declaredFalse.has_value());
+    CHECK_FALSE (declaredFalse->deviceId.has_value());
+
+    //  No EXTENSIONS at all: nothing optional is assumed.
+    const auto none = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP", "DEVICE_ID": "abc" })"), error);
+    REQUIRE (none.has_value());
+    CHECK_FALSE (none->deviceId.has_value());
+}
+
+TEST_CASE ("host info: a declared extension that is malformed is ignored, and the device still reads")
+{
+    std::string error;
+
+    const auto info = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP",
+        "DEVICE_ID": 42, "CLOCK": "ptp",
+        "EXTENSIONS": { "DEVICE_ID": true, "CLOCK": true } })"), error);
+    REQUIRE (info.has_value());
+    CHECK (info->meetsC1());
+    CHECK_FALSE (info->deviceId.has_value());
+    CHECK_FALSE (info->clock.has_value());
+
+    const auto blank = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP",
+        "DEVICE_ID": "   ", "CLOCK": { "DOMAIN": "0", "SCHEDULING": true },
+        "EXTENSIONS": { "DEVICE_ID": true, "CLOCK": true } })"), error);
+    REQUIRE (blank.has_value());
+    CHECK_FALSE (blank->deviceId.has_value());
+    CHECK_FALSE (blank->clock.has_value());             // no SOURCE, no clock
+
+    //  SCHEDULING schedules only as a boolean true.
+    const auto loose = parseHostInfo (std::string_view (R"({
+        "NAME": "Renderer", "OSC_PORT": 8000, "OSC_TRANSPORT": "UDP",
+        "CLOCK": { "SOURCE": "ntp", "DOMAIN": "pool.example", "SCHEDULING": "yes" },
+        "EXTENSIONS": { "CLOCK": true } })"), error);
+    REQUIRE (loose.has_value());
+    REQUIRE (loose->clock.has_value());
+    CHECK (loose->clock->source == "ntp");
+    CHECK (loose->clock->domain == std::optional<std::string> ("pool.example"));
+    CHECK_FALSE (loose->clock->scheduling);
+}
+
+TEST_CASE ("host info: a clock goes to JSON and comes back the same")
+{
+    ClockInfo clock;
+    clock.source = "ptp";
+    clock.domain = "0";
+    clock.scheduling = true;
+
+    auto* extensions = new juce::DynamicObject();
+    extensions->setProperty ("CLOCK", true);
+
+    const auto served = object ({ { "NAME", "Thing" }, { "OSC_PORT", 1 }, { "OSC_TRANSPORT", "UDP" },
+                                  { "CLOCK", clock.toVar() }, { "EXTENSIONS", juce::var (extensions) } });
+
+    std::string error;
+    const auto info = parseHostInfo (juce::JSON::toString (served).toStdString(), error);
+    REQUIRE (info.has_value());
+    REQUIRE (info->clock.has_value());
+    CHECK (*info->clock == clock);
+
+    //  Without a domain the key is absent, not empty.
+    CHECK_FALSE (ClockInfo {}.toVar().hasProperty ("DOMAIN"));
+}
