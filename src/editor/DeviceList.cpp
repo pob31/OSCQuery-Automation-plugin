@@ -341,7 +341,10 @@ namespace oqa::editor
                     {
                         Row candidate;
                         candidate.source = Row::Source::candidate;
-                        candidate.name = "   " + row.name;
+                        /*  Found by its DEVICE_ID, a candidate may answer to
+                            another NAME than the session's (6x-4): its own is shown. */
+                        const auto ownName = c.getProperty ("name", "").toString();
+                        candidate.name = "   " + (ownName.isNotEmpty() ? ownName : row.name);
                         candidate.host = c.getProperty ("host", "").toString();
                         candidate.port = static_cast<int> (c.getProperty ("port", 0));
                         candidate.identity = c.getProperty ("identity", "").toString();
@@ -350,8 +353,14 @@ namespace oqa::editor
                         const bool identityMatch = static_cast<bool> (c.getProperty ("identity_match", false));
                         const bool hashKnown = static_cast<bool> (c.getProperty ("hash_known", false));
                         const bool hashMatch = static_cast<bool> (c.getProperty ("hash_match", false));
+                        const bool idKnown = static_cast<bool> (c.getProperty ("id_known", false));
+                        const bool idMatch = static_cast<bool> (c.getProperty ("id_match", false));
+
+                        /*  A candidate found by the identifier was not asked for
+                            its identity leaf: nothing is said of it. */
                         candidate.state = juce::String ("candidate")
-                                        + (ref.identityPath.has_value() ? (identityMatch ? ", identity matches" : ", identity differs") : juce::String())
+                                        + (idKnown ? (idMatch ? ", same DEVICE_ID" : ", other DEVICE_ID") : juce::String())
+                                        + (ref.identityPath.has_value() && ! idMatch ? (identityMatch ? ", identity matches" : ", identity differs") : juce::String())
                                         + (hashKnown ? (hashMatch ? ", same tree" : ", other tree") : juce::String());
                         rows.push_back (candidate);
                     }

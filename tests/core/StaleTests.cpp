@@ -214,6 +214,7 @@ TEST_CASE ("stale: a path the device retypes shows retyped, naming both types")
     REQUIRE (one.bind (0, gain, 0, device, why));
     one.connect();
     rig.waitReady (one);
+    rig.waitListening (one);                    // PATH_CHANGED goes to the websocket: sent before it is open, it is never heard
     REQUIRE (waitUntil ([&] { return slotState (one, 0) == "ok"; }));
 
     REQUIRE (rig.mock.retype (gain.fullPath, "i"));
