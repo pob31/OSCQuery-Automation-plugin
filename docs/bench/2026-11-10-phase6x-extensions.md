@@ -5,8 +5,8 @@ against mock devices on loopback and a DNS-SD responder of the tests' own. Every
 test suite's own word (`lib/oscquery/tests/HostInfoTests.cpp`, `ServerTests.cpp`;
 `tests/core/StateChunkTests.cpp`, `ReidentifyTests.cpp`, `TimingTests.cpp`, `ServerTests.cpp`,
 `MonitorModelTests.cpp`), repeatable with `ctest --preset vs-debug`: 8 of 8 entries pass, under C
-and fr_FR. **Not run this day:** the farm (the Mac mini and the NUC were not reachable), WFS-DIY
-live (it was not running), any DAW. Those rows are at the end, to fill.
+and fr_FR. The farm ran it the same evening (the last table). **Not run this day:** WFS-DIY live (it was
+not running), any DAW. Those rows are at the end, to fill.
 
 The extensions are those of [`docs/spec/extensions-draft-0.1.md`](../spec/extensions-draft-0.1.md).
 No device on the bench declares either yet; the mock device is the only one that does.
@@ -85,7 +85,8 @@ No device on the bench declares either yet; the mock device is the only one that
 
 | Check | How | Result |
 | --- | --- | --- |
-| The farm | `scripts/farm-check.sh` on the Mac mini and the NUC | _to fill_ |
+| The farm, the Mac mini (macOS 15, Apple silicon) | `scripts/farm-check.sh` on a fresh clone of `c9ffb07`, the same day | **8 of 8 CTest entries; the Release VST3, AU and CLAP build; pluginval 1.0.4 at strictness 5 SUCCESS on the 32-slot plugin and on the Monitor; clap-validator 0.4.1: 229 run, 156 passed, 0 failed, 73 skipped** |
+| The farm, the NUC (Ubuntu 24.04, GCC 13) | the same script; its validator half by hand after one download failed to resolve | **8 of 8 CTest entries, no warning in our code; pluginval SUCCESS on both (no display: GUI tests skipped); clap-validator: 229 run, 155 passed, 0 failed, 1 warning (denormals 9.2x on the pass-through, the timing warning Phase 6 met there), 73 skipped** |
 | CI on three platforms | pull request #3's run on `3855c00` (42885141999) | **green on Linux, macOS and Windows: every suite, pluginval, clap-validator** |
 | A device with neither extension, live | WFS-DIY (HTTP 5005) bound in REAPER before and after this phase; a session saved before reloads and saves to the same bytes | _to fill_ |
 | Two mocks under one NAME in the editor | `oqa-mock-device --device-id …` twice, the plugin in REAPER: the candidate rows say "same DEVICE_ID" and "other DEVICE_ID" | _to fill_ |

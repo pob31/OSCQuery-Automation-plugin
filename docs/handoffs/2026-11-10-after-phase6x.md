@@ -15,8 +15,10 @@ For the next Claude Code session on this repository, and for the author. Read th
   `DEVICE_ID` and `CLOCK` when a device declares them, and its own server serves both. Report:
   `docs/bench/2026-11-10-phase6x-extensions.md`.
 - **Measured** (Windows, Debug, loopback): `ctest --preset vs-debug`, 8 of 8 entries, C and fr_FR.
-- **Not measured:** the farm (both machines were unreachable), CI on the code's pull request,
-  WFS-DIY live, any DAW. The report's last table lists the rows.
+- **CI green on three platforms** on the code's pull request (#3), and **the farm passes** on both
+  machines (fresh clones in `~/oqa-6x`; `~/oqa-6b` on each still holds uncommitted edits from an
+  earlier session and was left alone).
+- **Not measured:** WFS-DIY live, any DAW. The report's last table lists the rows.
 
 ## Decided this session (the author, 2026-11-10)
 

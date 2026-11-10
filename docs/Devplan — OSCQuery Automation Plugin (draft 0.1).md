@@ -1172,7 +1172,10 @@ branch `extensions-device-id-clock`, 6x-1 to 6x-6, each with its tests. Report:
   and the shape of the two keys, which sit in two constants of `lib/oscquery/oscquery/HostInfo.h`
   and the `CLOCK` reader beside them.
 - **CI green on Linux, macOS and Windows** on `3855c00` (run 42885141999, pull request #3).
-- *Still to fill:* the farm, and the report's DAW rows
+- **The farm, the same evening, on `c9ffb07`:** the Mac mini and the NUC each pass all eight CTest
+  entries, pluginval at strictness 5 on the plugin and the Monitor, and clap-validator with no
+  failure (the NUC's one warning is the denormals timing on the pass-through, as in Phase 6).
+- *Still to fill:* the report's DAW rows
   (WFS-DIY unchanged, two mocks in the editor, the timetags box, two DAWs on one machine).
 
 ---
