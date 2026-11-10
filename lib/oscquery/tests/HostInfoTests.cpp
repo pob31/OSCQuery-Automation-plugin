@@ -294,3 +294,45 @@ TEST_CASE ("host info: a clock goes to JSON and comes back the same")
     //  Without a domain the key is absent, not empty.
     CHECK_FALSE (ClockInfo {}.toVar().hasProperty ("DOMAIN"));
 }
+
+TEST_CASE ("host info: the mock device serves what it is given beside HOST_INFO, declared or not (6x-2)")
+{
+    ClockInfo clock;
+    clock.source = "ptp";
+    clock.scheduling = true;
+
+    oqatest::MockDevice::Options options;
+    options.hostInfoExtras = object ({ { "DEVICE_ID", "mock-id-1" }, { "CLOCK", clock.toVar() } });
+
+    //  Served, not declared: the client reads neither.
+    oqatest::MockDevice device (options);
+    REQUIRE (device.loadTree (juce::JSON::parse (oqatest::fixture ("trees/generic-device.json"))));
+    REQUIRE (device.start());
+
+    std::string error;
+    auto info = parseHostInfo (device.hostInfo(), error);
+    REQUIRE (info.has_value());
+    CHECK (info->raw["DEVICE_ID"].toString() == "mock-id-1");
+    CHECK_FALSE (info->deviceId.has_value());
+    CHECK_FALSE (info->clock.has_value());
+    CHECK (info->has ("LISTEN"));                      // what it listed before, it still lists
+
+    //  Declared while running: both are read.
+    auto extensions = device.options().extensions;
+    extensions.add ("DEVICE_ID");
+    extensions.add ("CLOCK");
+    device.setExtensions (extensions);
+
+    info = parseHostInfo (device.hostInfo(), error);
+    REQUIRE (info.has_value());
+    CHECK (info->deviceId == std::optional<std::string> ("mock-id-1"));
+    REQUIRE (info->clock.has_value());
+    CHECK (*info->clock == clock);
+
+    //  And taken away again.
+    device.setHostInfoExtras ({});
+    info = parseHostInfo (device.hostInfo(), error);
+    REQUIRE (info.has_value());
+    CHECK_FALSE (info->deviceId.has_value());          // declared, absent: nothing to read
+    CHECK_FALSE (info->clock.has_value());
+}

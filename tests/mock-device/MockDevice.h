@@ -92,6 +92,13 @@ namespace oqatest
             /** Emitted as OSC_IP when not empty; absent otherwise, as most devices. */
             juce::String oscIp;
 
+            /*  Members added to HOST_INFO as they are, when this is an object
+                (Phase 6x: the optional DEVICE_ID and CLOCK, or anything else a
+                device might put there). Nothing is added to `extensions` for
+                them: a test lists the names itself, so that the device which
+                serves a key without declaring it can be built too. */
+            juce::var hostInfoExtras;
+
             /*  At or above zero: a device that applies what it is sent and
                 streams it back to its LISTENers after this many milliseconds,
                 as a real one echoes (Phase 4's loop guard). Below zero: off.
@@ -183,6 +190,11 @@ namespace oqatest
             session refers to (Phase 5 compares NAME on reopen); set before the
             client asks, as a device's name is its own. */
         void setName (const juce::String& name);
+
+        /*  Replaces Options::hostInfoExtras and Options::extensions. Set before
+            the client asks, as with setName(): a device's word is its own. */
+        void setHostInfoExtras (const juce::var& extras);
+        void setExtensions (const juce::StringArray& extensions);
 
         /** Every binary frame received over the websocket, in order: the OSC a
             client sends a device this way (spec draft L3, L4). */
