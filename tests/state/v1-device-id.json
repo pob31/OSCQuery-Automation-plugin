@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "devices": [
+    {
+      "name": "Generic Mock",
+      "last_host": "192.168.1.40",
+      "last_port": 5005,
+      "tree_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "device_id": "6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47",
+      "honours_timetags": true,
+      "offset_ms": 0.0
+    },
+    {
+      "name": "Second Mock",
+      "last_host": "192.168.1.41",
+      "last_port": 5005,
+      "tree_hash": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "honours_timetags": false,
+      "offset_ms": 0.0
+    }
+  ],
+  "slots": [
+    {
+      "host_param_id": 0,
+      "device_index": 0,
+      "path": "/mixer/channel/1/gain",
+      "arg_index": 0,
+      "type": "f",
+      "range": { "min": -60.0, "max": 12.0 },
+      "scaling": "linear",
+      "direction": "send",
+      "display_name": "Ch 1 gain",
+      "range_overridden": false,
+      "unit": "dB"
+    }
+  ]
+}

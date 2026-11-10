@@ -25,7 +25,9 @@
 
       version      1, from this first commit
       devices[]    name, last_host, last_port, tree_hash, identity_path,
-                   identity_value, honours_timetags, offset_ms
+                   identity_value, honours_timetags, offset_ms, and
+                   device_id when the device declares a DEVICE_ID (Phase
+                   6x; additive, written only when set, version unchanged)
       slots[]      host_param_id, device_index, path, arg_index, type, range
                    {min, max}, scaling, direction, display_name,
                    range_overridden, and two the PRD's list has not: unit
@@ -84,6 +86,12 @@ namespace oqa::core
 
         std::optional<std::string> identityPath;
         std::optional<std::string> identityValue;
+
+        /*  The device's DEVICE_ID, when it declares one (Phase 6x; the optional
+            extension of docs/spec/extensions-draft-0.1.md). Written only when
+            set, so a chunk saved before, or against a device that declares
+            none, keeps its bytes. */
+        std::optional<std::string> deviceId;
 
         bool honoursTimetags = false;
         double offsetMs = 0.0;

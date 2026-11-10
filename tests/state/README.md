@@ -16,3 +16,4 @@ never a real product's namespace.
 | `v1-receive.json` | 1 | One device; a read-only float set to receive, a ranged float set to both, a ranged float set to send (Phase 4: driven through the registry in `tests/core/ReceiveTests.cpp`) |
 | `v1-values.json` | 1 | One device, one bound slot, and `values`: every slot's host value, eight of them for an 8-slot table (Phase 5b: what a CLAP restores from its own state) |
 | `v1-instance.json` | 1 | `instance` set to 2; one slot bound through a `path_pattern` with `$instance`, one through a plain path (Phase 6d-2; `tests/core/PatternTests.cpp`) |
+| `v1-device-id.json` | 1 | Two devices, the first with `device_id` (the `DEVICE_ID` the device declared, Phase 6x), the second without; one bound slot. An additive field: the version stays 1 and it is written only where it is set |
