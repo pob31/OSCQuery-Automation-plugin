@@ -1171,7 +1171,8 @@ branch `extensions-device-id-clock`, 6x-1 to 6x-6, each with its tests. Report:
   two candidates under one identifier; and, with Julien Bayle and Jean-Michaël Celerier, the names
   and the shape of the two keys, which sit in two constants of `lib/oscquery/oscquery/HostInfo.h`
   and the `CLOCK` reader beside them.
-- *Still to fill:* CI on three platforms on the pull request, the farm, and the report's DAW rows
+- **CI green on Linux, macOS and Windows** on `3855c00` (run 42885141999, pull request #3).
+- *Still to fill:* the farm, and the report's DAW rows
   (WFS-DIY unchanged, two mocks in the editor, the timetags box, two DAWs on one machine).
 
 ---

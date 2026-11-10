@@ -86,7 +86,7 @@ No device on the bench declares either yet; the mock device is the only one that
 | Check | How | Result |
 | --- | --- | --- |
 | The farm | `scripts/farm-check.sh` on the Mac mini and the NUC | _to fill_ |
-| CI on three platforms | the pull request's run | _to fill_ |
+| CI on three platforms | pull request #3's run on `3855c00` (42885141999) | **green on Linux, macOS and Windows: every suite, pluginval, clap-validator** |
 | A device with neither extension, live | WFS-DIY (HTTP 5005) bound in REAPER before and after this phase; a session saved before reloads and saves to the same bytes | _to fill_ |
 | Two mocks under one NAME in the editor | `oqa-mock-device --device-id …` twice, the plugin in REAPER: the candidate rows say "same DEVICE_ID" and "other DEVICE_ID" | _to fill_ |
 | The timetags box | a mock with `--clock-scheduling`: the device pane's box ticked without a hand, its tooltip saying why; the same in the Monitor | _to fill_ |
