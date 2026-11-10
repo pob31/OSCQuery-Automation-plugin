@@ -16,7 +16,7 @@ tree; timetag support is a per-device setting. The PRD is amended accordingly.
 **Decided 2026-11-10, by the author:** beside the profile, which still adds no field, two
 **optional extensions**, `DEVICE_ID` and `CLOCK`, drafted by Julien Bayle in
 `docs/spec/extensions-draft-0.1.md`. Declared in `EXTENSIONS`, ignorable, additive; the plugin
-uses them when a device declares them and serves them itself (Phase 6b). **Pull requests from the
+uses them when a device declares them and serves them itself (Phase 6x). **Pull requests from the
 same day**, Julien Bayle's first having been merged.
 
 ---
@@ -1059,7 +1059,7 @@ Built in nine commits on `main` in one session, 6a-1 to 6f, in the plan's order,
 
 ---
 
-## Phase 6b — Optional extensions: `DEVICE_ID` and `CLOCK` · M
+## Phase 6x — Optional extensions: `DEVICE_ID` and `CLOCK` · M
 
 **Goal:** the plugin recognises a device by the identifier it declares and takes its word on
 timetags, and says both of itself, without asking anything of a device that declares neither.
@@ -1096,12 +1096,13 @@ with neither extension, and WFS-DIY live behaves as before.
 **Needs from the author:** nothing blocking. The implementer's decisions under *Planned* are the
 author's to overrule.
 
-**Planned, 2026-11-10.** Taken before Phase 7 at the author's word. Two pull requests, the first
+**Planned, 2026-11-10.** Taken before Phase 7 at the author's word, and lettered x because
+6a to 6f are Phase 6's own subphases. Two pull requests, the first
 since Julien Bayle's: the text (this section, the PRD's dated amendments, the corrected draft,
-C5's wording), then the code in seven subphases, each one commit with its tests: **6b-1** the
-library parses and serves; **6b-2** the mock device; **6b-3** the state chunk; **6b-4**
-re-identification; **6b-5** the clock on the client; **6b-6** the plugin's own server and the
-Monitor; **6b-7** the bench report and this record.
+C5's wording), then the code in seven subphases, each one commit with its tests: **6x-1** the
+library parses and serves; **6x-2** the mock device; **6x-3** the state chunk; **6x-4**
+re-identification; **6x-5** the clock on the client; **6x-6** the plugin's own server and the
+Monitor; **6x-7** the bench report and this record.
 
 - *Decided by the author the same day:* the pull request merged as it was and corrected on top;
   the extensions optional and outside Core and Live, so "the Core profile adds no field" stands;
@@ -1127,7 +1128,7 @@ Monitor; **6b-7** the bench report and this record.
   cannot know what disciplines the system clock; no node is added to the server's namespace; the
   time tag of a received bundle stays unused, since placing recorded automation by it needs an
   agreement on the clock that no bench device offers; the missing send delay and the `WS_PORT`
-  line are left as the author's open items, and the unlocked read is fixed in 6b-5.
+  line are left as the author's open items, and the unlocked read is fixed in 6x-5.
 
 ---
 
@@ -1250,4 +1251,4 @@ the editor and configured on the device side, VST3 and AU first through JUCE's w
 own CLAP shim in Phase 5b, five slot-count plugin IDs and the registry in a shared core library.
 
 Decided 2026-11-10: two optional extensions beside the profile (`DEVICE_ID`, `CLOCK`), the plugin
-their client and their server (Phase 6b); pull requests from that day on.
+their client and their server (Phase 6x); pull requests from that day on.
