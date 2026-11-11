@@ -16,6 +16,7 @@
 */
 
 #include <oscquery/net/TcpSender.h>
+#include <oscquery/net/WriteNoSignal.h>
 
 #include <juce_core/juce_core.h>
 
@@ -116,7 +117,8 @@ namespace oqa::oscquery::net
             return false;
         }
 
-        const auto written = impl->socket->write (framed.data(), static_cast<int> (framed.size()));
+        //  Never juce's own write: a device that closed the connection would end the process (WriteNoSignal.h).
+        const auto written = writeNoSignal (*impl->socket, framed.data(), static_cast<int> (framed.size()));
 
         if (written != static_cast<int> (framed.size()))
         {

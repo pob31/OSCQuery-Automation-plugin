@@ -27,6 +27,7 @@ add_executable(oqa_oscquery_tests
     HttpGetTests.cpp
     DeviceTests.cpp
     MdnsTests.cpp
+    WriteNoSignalTests.cpp
     AnswerPacerTests.cpp
     FinderTests.cpp
     TransportTests.cpp
