@@ -19,6 +19,7 @@
 */
 
 #include <oscquery/net/HttpGet.h>
+#include <oscquery/net/WriteNoSignal.h>
 
 #include <juce_core/juce_core.h>
 
@@ -115,7 +116,8 @@ namespace oqa::oscquery::net
                                     "Connection: close\r\n"
                                     "\r\n";
 
-        if (socket.write (request.data(), static_cast<int> (request.size()))
+        //  Never juce's own write: a server that closed in the meantime would end the process (WriteNoSignal.h).
+        if (writeNoSignal (socket, request.data(), static_cast<int> (request.size()))
               != static_cast<int> (request.size()))
         {
             reply.error = "the request could not be written";

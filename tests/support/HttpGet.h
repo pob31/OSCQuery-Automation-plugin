@@ -30,6 +30,11 @@
 
 #include <juce_core/juce_core.h>
 
+#if ! JUCE_WINDOWS
+ #include <sys/socket.h>
+ #include <sys/types.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -47,6 +52,31 @@ namespace oqatest
 
     /** One HTTP reply: status, headers (a multimap, so a field sent twice is
         seen twice) and body. Status 0 means no reply at all. */
+    /*  juce::StreamingSocket::write is a plain send(): to a peer that has
+        closed it raises SIGPIPE on macOS and Linux, and the test program is
+        gone without a line. The library's own is oscquery/net/WriteNoSignal.h,
+        which says more; this is its twin, for a header that some test targets
+        include without the library. */
+    inline int writeNoSignal (juce::StreamingSocket& socket, const void* data, int size) noexcept
+    {
+      #if JUCE_WINDOWS
+        return socket.write (data, size);
+      #else
+        const auto handle = socket.getRawSocketHandle();
+
+        if (handle < 0 || ! socket.isConnected())
+            return -1;
+
+       #if defined (MSG_NOSIGNAL)
+        return static_cast<int> (::send (handle, data, static_cast<std::size_t> (size), MSG_NOSIGNAL));
+       #else
+        const int on = 1;
+        (void) ::setsockopt (handle, SOL_SOCKET, SO_NOSIGPIPE, &on, static_cast<socklen_t> (sizeof (on)));
+        return static_cast<int> (::send (handle, data, static_cast<std::size_t> (size), 0));
+       #endif
+      #endif
+    }
+
     struct HttpReply
     {
         int status = 0;
@@ -76,7 +106,7 @@ namespace oqatest
                                     + "Connection: close\r\n"
                                     + "\r\n";
 
-        if (socket.write (request.data(), static_cast<int> (request.size()))
+        if (writeNoSignal (socket, request.data(), static_cast<int> (request.size()))
               != static_cast<int> (request.size()))
             return reply;
 
