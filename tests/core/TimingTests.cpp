@@ -223,7 +223,12 @@ TEST_CASE ("clock: a hand wins over what the device declares, a chunk's push doe
     a.connect();
     b.connect();
 
-    REQUIRE (oqatest::waitUntil ([&] { return origin (a) == "device" && honours (a); }));
+    {
+        //  Failed once in a dozen full runs on the Mac mini, unexplained: the status is printed if it does again.
+        const bool declared = oqatest::waitUntil ([&] { return origin (a) == "device" && honours (a); }, 20000);
+        INFO (a.statusJson());
+        REQUIRE (declared);
+    }
 
     /*  Unticked by hand, with an offset: the device claims to schedule and the user knows better. */
     a.setDeviceTiming (0, false, 4.0);

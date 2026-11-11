@@ -103,11 +103,20 @@ namespace oqatest
         /** Wait until the registry can send to this mock from `instance`. */
         void waitReady (const oqa::core::Instance& instance, int deviceIndex = 0) const
         {
-            REQUIRE (waitUntil ([&]
+            const bool ready = waitUntil ([&]
             {
                 const auto d = deviceStatus (instance, deviceIndex);
                 return static_cast<bool> (d.getProperty ("sender_ready", false)) && static_cast<bool> (d.getProperty ("tree_loaded", false));
-            }));
+            });
+
+            /*  A device that takes more than ten seconds to be ready on
+                loopback has been seen, rarely, on macOS (the Mac mini and CI
+                runners, 2026-11-11) and is not explained yet: where it stood
+                is printed, so that the next time says which stage waited. */
+            if (! ready)
+                MESSAGE ("not ready after 10 s; the device's status: " << juce::JSON::toString (deviceStatus (instance, deviceIndex), true).toStdString());
+
+            REQUIRE (ready);
         }
 
         /** Wait until the registry's websocket to this mock is open and streaming. */

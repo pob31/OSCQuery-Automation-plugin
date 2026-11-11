@@ -203,7 +203,11 @@ TEST_CASE ("reidentify: a session saved against a device on one address reopens 
     rig.waitReady (one);
     rig.waitListening (one);
 
-    float values[4] = { 0.4f, 0.0f, 0.0f, 0.0f };
+    /*  The first block after a session is loaded only notes where the host
+        stands (decided 2026-11-11); the move after it is sent. */
+    float values[4] = {};
+    one.processBlock (values, 4);
+    values[0] = 0.4f;
     one.processBlock (values, 4);
     REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (rig.mock)) >= 1; }));
 
@@ -770,4 +774,143 @@ TEST_CASE ("reidentify by DEVICE_ID: a second device seen later with the identif
     /*  Gone again, the warning goes. */
     copy.mock.stop();
     REQUIRE (waitUntil ([&] { return ! anyWarningContains (one, "declares the same DEVICE_ID"); }, resolveTimeoutMs));
+}
+
+//==============================================================================
+//  Decided 2026-11-11, after Julien Bayle's retest of ec6725c (2.5): the one
+//  device under the name is adopted if it serves what the session is bound to.
+namespace
+{
+    /** The node at `path` in a `GET /` tree, or void. */
+    juce::var findInTree (const juce::var& node, const std::string& path)
+    {
+        if (node.getProperty ("FULL_PATH", "").toString().toStdString() == path)
+            return node;
+
+        if (auto* contents = node.getProperty ("CONTENTS", {}).getDynamicObject())
+            for (const auto& child : contents->getProperties())
+                if (const auto found = findInTree (child.value, path); ! found.isVoid())
+                    return found;
+
+        return {};
+    }
+}
+
+TEST_CASE ("reidentify: a device under the name that does not serve the bound path yet is waited for, not adopted; the day it serves it, it is")
+{
+    /*  The session was bound to a leaf of the whole tree. The device that
+        answers to its name is still starting: that leaf is not there yet. */
+    const auto whole = juce::JSON::parse (oqatest::fixture ("trees/generic-device.json"));
+    std::string error;
+    const auto wholeTree = Tree::parse (whole, error);
+    REQUIRE_MESSAGE (wholeTree.has_value(), error);
+
+    const Node* gain = nullptr;
+
+    for (const auto* leaf : wholeTree->leaves())
+        if (gain == nullptr && isRangedFloat (*leaf))
+            gain = leaf;
+
+    REQUIRE (gain != nullptr);
+    const auto gainNode = findInTree (whole, gain->fullPath).clone();
+    REQUIRE_FALSE (gainNode.isVoid());
+
+    auto starting = whole.clone();
+    REQUIRE (removeFromTree (starting, gain->fullPath));
+
+    const std::string name = "Still Starting";
+    Rig rig ({}, starting);
+    rig.mock.setName (name);
+
+    MdnsResponder responder ({ { name, "starting-pc", rig.mock.httpPort() } });
+    Registry::shared().setFinderOptions (finderVia (responder.port()));
+
+    DeviceRef ref;
+    ref.name = name;
+    ref.lastHost = loopback;
+    ref.lastPort = deadPort();
+
+    Instance one (api(), 4, "reid-starting");
+    std::string why;
+    REQUIRE (one.bind (0, *gain, 0, one.addDevice (ref), why));
+    one.connect();
+
+    REQUIRE (waitUntil ([&] { return resolution (one) == "unresolved" && candidateCount (one) == 1; }, resolveTimeoutMs));
+    CHECK (anyWarningContains (one, "does not serve 1 of the 1 bound paths"));
+
+    {
+        const auto status = Rig::deviceStatus (one);
+        const auto candidate = (*status.getProperty ("candidates", {}).getArray())[0];
+        CHECK (static_cast<int> (candidate.getProperty ("port", 0)) == rig.mock.httpPort());
+        CHECK (static_cast<bool> (candidate.getProperty ("serves_known", false)));
+        CHECK (static_cast<int> (candidate.getProperty ("unserved", 0)) == 1);
+    }
+
+    float values[4] = { 0.4f, 0.0f, 0.0f, 0.0f };
+    one.processBlock (values, 4);
+    sleepMs (150);
+    CHECK (rig.mock.receivedOsc().empty());
+
+    /*  It finishes starting: the leaf appears. Nobody points at anything. */
+    REQUIRE (rig.mock.add (gain->fullPath, gainNode));
+
+    REQUIRE (waitUntil ([&] { return resolution (one) == "confirmed" && portOf (one) == rig.mock.httpPort(); }, resolveTimeoutMs));
+    rig.waitReady (one);
+    REQUIRE (waitUntil ([&] { return ! anyWarningContains (one, "does not serve"); }));
+
+    values[0] = 0.6f;
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (rig.mock)) >= 1; }));
+}
+
+TEST_CASE ("reidentify: a device under the name that serves every bound path is adopted though its tree is not the one saved, with the notice")
+{
+    /*  The device has grown a leaf since the session was saved: another tree
+        hash, the same bound path. Adopted, and the tree notice says so. */
+    const auto whole = juce::JSON::parse (oqatest::fixture ("trees/generic-device.json"));
+    std::string error;
+    const auto wholeTree = Tree::parse (whole, error);
+    REQUIRE_MESSAGE (wholeTree.has_value(), error);
+
+    const Node* gain = nullptr;
+    const Node* other = nullptr;
+
+    for (const auto* leaf : wholeTree->leaves())
+    {
+        if (gain == nullptr && isRangedFloat (*leaf))
+            gain = leaf;
+        else if (other == nullptr && isRangedFloat (*leaf))
+            other = leaf;
+    }
+
+    REQUIRE (gain != nullptr);
+    REQUIRE (other != nullptr);
+
+    //  Saved against the tree less one leaf the session is not bound to.
+    auto saved = whole.clone();
+    REQUIRE (removeFromTree (saved, other->fullPath));
+    const auto savedTree = Tree::parse (saved, error);
+    REQUIRE_MESSAGE (savedTree.has_value(), error);
+
+    const std::string name = "Grown Since";
+    Rig rig;                                            // serves the whole tree
+    rig.mock.setName (name);
+
+    MdnsResponder responder ({ { name, "grown-pc", rig.mock.httpPort() } });
+    Registry::shared().setFinderOptions (finderVia (responder.port()));
+
+    DeviceRef ref;
+    ref.name = name;
+    ref.lastHost = loopback;
+    ref.lastPort = deadPort();
+    ref.treeHash = savedTree->treeHash();
+    REQUIRE (ref.treeHash != rig.tree.treeHash());
+
+    Instance one (api(), 4, "reid-grown");
+    std::string why;
+    REQUIRE (one.bind (0, *gain, 0, one.addDevice (ref), why));
+    one.connect();
+
+    REQUIRE (waitUntil ([&] { return resolution (one) == "confirmed" && portOf (one) == rig.mock.httpPort(); }, resolveTimeoutMs));
+    REQUIRE (waitUntil ([&] { return static_cast<bool> (Rig::deviceStatus (one).getProperty ("tree_changed", false)); }));
 }

@@ -253,6 +253,7 @@ TEST_CASE ("retest 2.12: a toggle is sent when its state changes, not at every h
     const auto& mute = rig.leafWhere (isToggle);
 
     Instance one (api(), 4, "retest-toggle");
+    one.setHostHoldMs (50);                 // shorter than this case's pauses, so the device's own move is followed
     std::string why;
     REQUIRE (one.bind (0, mute, 0, one.addDevice (rig.device ("retest-toggle")), why));
     one.setDirection (0, Direction::both);
@@ -268,12 +269,13 @@ TEST_CASE ("retest 2.12: a toggle is sent when its state changes, not at every h
         one.pollReceived ([] (int, float) {});
     };
 
-    /*  The first block posts everything: off, once. */
+    /*  Where the host stands says nothing; its first move says off, once. */
     post (0.0f);
+    CHECK (sent (rig) == 0);
+    post (0.2f);
     REQUIRE (waitUntil ([&] { return sent (rig) == 1; }));
 
-    /*  Three moves below the half: the state has not changed. */
-    post (0.2f);
+    /*  Two more moves below the half: the state has not changed. */
     post (0.4f);
     post (0.49f);
     CHECK (sent (rig) == 1);
@@ -296,4 +298,202 @@ TEST_CASE ("retest 2.12: a toggle is sent when its state changes, not at every h
     CHECK (sent (rig) == 3);
     post (0.3f);
     REQUIRE (waitUntil ([&] { return sent (rig) == 4; }));
+}
+
+//==============================================================================
+//  Decided 2026-11-11, from the same report: 2.1, 2.3 and 2.6.
+TEST_CASE ("retest 2.1: a session loaded and connected sends nothing; a move of the host's is sent; every slot is sent once when the transport starts")
+{
+    Rig rig;
+    const auto& gain = rig.leafWhere ([] (const Node& n) { return isRangedFloat (n) && n.argumentCount() == 1; });
+    const auto& pan  = rig.leafWhere ([&] (const Node& n) { return isRangedFloat (n) && n.argumentCount() == 1 && n.fullPath != gain.fullPath; });
+
+    std::string chunk;
+
+    {
+        Instance bound (api(), 4, "retest-connect-bind");
+        std::string why;
+        const int device = bound.addDevice (rig.device ("retest-connect"));
+        REQUIRE (bound.bind (0, gain, 0, device, why));
+        REQUIRE (bound.bind (1, pan, 0, device, why));
+        chunk = bound.saveState();
+    }
+
+    Instance one (api(), 4, "retest-connect");
+    std::string error;
+    REQUIRE_MESSAGE (one.loadState (chunk, error), error);
+    one.connect();
+    rig.waitReady (one);
+    rig.waitHeard();
+    REQUIRE (waitUntil ([&] { return slotState (one, 0) == "ok" && slotState (one, 1) == "ok"; }));
+
+    /*  The host holds the session's values, block after block: not a move. */
+    float values[4] = { 0.3f, 0.7f, 0.0f, 0.0f };
+
+    for (int block = 0; block < 5; ++block)
+    {
+        one.processBlock (values, 4);
+        sleepMs (30);
+    }
+
+    CHECK (sent (rig) == 0);
+    CHECK (rig.mock.receivedWebsocketOsc().empty());
+
+    /*  A move: that slot, and only it. */
+    values[0] = 0.5f;
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent (rig) == 1; }));
+    sleepMs (60);
+    CHECK (sent (rig) == 1);
+
+    /*  The transport starts: both slots, once, moved or not. */
+    one.setPlaying (true);
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent (rig) == 3; }));
+
+    for (int block = 0; block < 5; ++block)
+    {
+        one.processBlock (values, 4);
+        sleepMs (20);
+    }
+
+    CHECK (sent (rig) == 3);                    // still playing: nothing more
+
+    /*  Stopped and started again: once more. */
+    one.setPlaying (false);
+    one.processBlock (values, 4);
+    sleepMs (40);
+    CHECK (sent (rig) == 3);
+    one.setPlaying (true);
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent (rig) == 5; }));
+}
+
+TEST_CASE ("retest 2.1: nothing is sent to a device whose tree has not been read, so a leaf's ACCESS is known before it is written")
+{
+    /*  A device that answers HOST_INFO and nothing else: reachable, its
+        sender ready, and no tree to say what may be written. */
+    oqatest::MockDevice::Options options;
+    options.hostInfoOnly = true;
+    Rig rig (options);
+    const auto& gain = rig.leafWhere (isRangedFloat);
+
+    Instance one (api(), 4, "retest-no-tree");
+    std::string why;
+    REQUIRE (one.bind (0, gain, 0, one.addDevice (rig.device ("retest-no-tree")), why));
+    one.connect();
+    REQUIRE (waitUntil ([&] { return static_cast<bool> (Rig::deviceStatus (one).getProperty ("sender_ready", false)); }));
+    CHECK_FALSE (static_cast<bool> (Rig::deviceStatus (one).getProperty ("tree_loaded", true)));
+
+    float values[4] = { 0.4f, 0.0f, 0.0f, 0.0f };
+    one.processBlock (values, 4);
+    values[0] = 0.6f;
+    one.processBlock (values, 4);
+    sleepMs (300);
+
+    CHECK (rig.mock.receivedOsc().empty());
+    CHECK (rig.mock.receivedWebsocketOsc().empty());
+}
+
+TEST_CASE ("retest 2.3 and 2.6: while the host is moving a slot the device's value is not applied over it; a device left elsewhere is told again; outside a hold the device is followed")
+{
+    Rig rig;
+    const auto& gain = rig.leafWhere ([] (const Node& n) { return isRangedFloat (n) && n.argumentCount() == 1; });
+    const auto range = *gain.argument (0).range;
+    const auto units = [&] (double fraction) { return *range.min + fraction * (*range.max - *range.min); };
+
+    Instance one (api(), 4, "retest-hold");
+    std::string why;
+    REQUIRE (one.bind (0, gain, 0, one.addDevice (rig.device ("retest-hold")), why));
+    one.setDirection (0, Direction::both);
+    one.connect();
+    rig.waitReady (one);
+    rig.settleListen (one, 1);
+
+    std::vector<float> applied;
+    const auto poll = [&] { return one.pollReceived ([&] (int, float value) { applied.push_back (value); }); };
+    const auto heard = [&] { return static_cast<juce::int64> (Rig::deviceStatus (one).getProperty ("values_received", 0)); };
+
+    float values[4] = {};
+    one.processBlock (values, 4);
+
+    /*  The hold is set long where a step must fall inside it and short where
+        it must have run out, so that no step depends on how fast the machine
+        is (a CI runner took longer than 200 ms between two of them). */
+    const auto holding = [&] { one.setHostHoldMs (5000); };
+    const auto letTheHoldRunOut = [&] { one.setHostHoldMs (50); sleepMs (150); };
+
+    /*  The host moves to 0.8. The device, at that moment, went to 0.2 (a
+        crossing): heard, and not applied over the host's move. */
+    holding();
+    values[0] = 0.8f;
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent (rig) == 1; }));
+
+    auto before = heard();
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.2) }));
+    REQUIRE (waitUntil ([&] { return heard() > before; }));
+    CHECK (poll() == 0);
+    CHECK (applied.empty());
+
+    /*  The hold runs out with the device elsewhere: it is told the host's value again. */
+    letTheHoldRunOut();
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent (rig) == 2; }));
+
+    {
+        const auto bundles = bundlesReceived (rig.mock);
+        const auto& last = bundles.back().isBundle() ? bundles.back().elements.back() : bundles.back();
+        REQUIRE (last.args.size() == 1);
+        CHECK (last.args[0].asDouble() == doctest::Approx (units (0.8)).epsilon (1e-4));
+    }
+
+    /*  A device that ends where the host is, is left alone. */
+    holding();
+    values[0] = 0.6f;
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent (rig) == 3; }));
+    sleepMs (80);                                           // past the loop guard, so this is the device's own word
+    before = heard();
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.6) }));
+    REQUIRE (waitUntil ([&] { return heard() > before; }));
+    CHECK (poll() == 0);
+    letTheHoldRunOut();
+    one.processBlock (values, 4);
+    sleepMs (80);
+    CHECK (sent (rig) == 3);
+
+    /*  Outside a hold, the device is followed as ever. */
+    before = heard();
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.1) }));
+    REQUIRE (waitUntil ([&] { return heard() > before; }));
+    CHECK (poll() == 1);
+    REQUIRE (applied.size() == 1);
+    CHECK (applied.back() == doctest::Approx (0.1f).epsilon (1e-3));
+
+    values[0] = applied.back();                             // the host follows, and hands it back: not a move
+    one.processBlock (values, 4);
+    sleepMs (80);
+    CHECK (sent (rig) == 3);
+
+    /*  2.6: the host has moved to 0.9 and the audio thread has not seen it yet
+        when the device's next value comes in. The move stands, and is sent. */
+    const float hostNow[4] = { 0.9f, 0.0f, 0.0f, 0.0f };
+    applied.clear();
+    before = heard();
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.3) }));
+    REQUIRE (waitUntil ([&] { return heard() > before; }));
+    CHECK (one.pollReceived (hostNow, 4, [&] (int, float value) { applied.push_back (value); }) == 0);
+    CHECK (applied.empty());
+
+    values[0] = 0.9f;
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent (rig) == 4; }));
+
+    /*  With the hold turned off, the device's value is applied at once, as before. */
+    one.setHostHoldMs (0);
+    before = heard();
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.45) }));
+    REQUIRE (waitUntil ([&] { return heard() > before; }));
+    CHECK (poll() == 1);
 }

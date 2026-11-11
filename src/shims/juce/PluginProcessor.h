@@ -137,6 +137,7 @@ namespace oqa::shim
         core::Instance core;
         std::vector<SlotParameter*> slots;
         std::array<float, slotCount> values {};
+        std::array<float, slotCount> hostNow {};       // the message thread's: each parameter as it reads when values are received
         std::uint64_t shownRevision = 0;
 
         //  Record, on the message thread.

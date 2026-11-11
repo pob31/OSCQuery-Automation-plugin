@@ -49,6 +49,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -156,6 +157,8 @@ namespace oqa::core
             int port = 0;
             bool idKnown = false;       // the chunk holds a DEVICE_ID and this device declares one
             bool idMatch = false;       // and it is the chunk's
+            bool servesKnown = false;   // its tree was read against the session's bound paths
+            int unserved = 0;           // how many of them it does not serve (path gone, or another TYPE)
             std::string identity;       // the identity leaf's value there, when read
             bool identityMatch = false;
             bool hashKnown = false;
@@ -183,6 +186,56 @@ namespace oqa::core
                 return std::nullopt;
 
             return identityText (*values);
+        }
+
+        /** One bound argument of the session: what a device must serve to be the device it was bound to. */
+        struct Wanted
+        {
+            std::string path;
+            int arg = 0;
+            char type = 'f';
+
+            bool operator< (const Wanted& o) const { return std::tie (path, arg, type) < std::tie (o.path, o.arg, o.type); }
+        };
+
+        /*  How many of `wanted` the device at host:port does not serve, by the
+            rule a bound slot is checked with (the path a leaf, the argument
+            there, the same TYPE, T and F alike). nullopt when its tree cannot
+            be read. The resolver's thread, blocking. */
+        std::optional<int> unservedAt (const std::string& host, int port, const std::vector<Wanted>& wanted)
+        {
+            oscquery::Device::Options options;
+            options.host = host;
+            options.port = port;
+            options.httpTimeoutMs = resolverHttpTimeoutMs;
+            options.openWebsocket = false;
+
+            oscquery::Device probe (options);
+
+            if (! probe.probe() || ! probe.fetchTree())
+                return std::nullopt;
+
+            int missing = 0;
+
+            probe.withTree ([&] (const oscquery::Tree& tree)
+            {
+                const auto isToggle = [] (char c) { return c == 'T' || c == 'F'; };
+
+                for (const auto& w : wanted)
+                {
+                    const auto* node = tree.find (w.path);
+                    const auto arg = static_cast<std::size_t> (std::max (0, w.arg));
+
+                    const bool served = node != nullptr && ! node->isContainer() && node->type.has_value()
+                                     && arg < node->type->size()
+                                     && ((*node->type)[arg] == w.type || (isToggle ((*node->type)[arg]) && isToggle (w.type)));
+
+                    if (! served)
+                        ++missing;
+                }
+            });
+
+            return missing;
         }
 
         std::optional<std::string> fetchTreeHash (const std::string& host, int port)
@@ -282,6 +335,16 @@ namespace oqa::core
 
         std::atomic<bool> dirty { false };
 
+        /*  Whether the tree has vouched for every leaf this group drives (set
+            when the plan is built). A group that is not verified keeps its
+            place, so a move to a device that does not answer is still counted
+            as unsent; but to a device that does answer, nothing goes out until
+            the tree has been read and ACCESS checked. `held` notes that a move
+            was kept back for that reason: the group built in its place once
+            the tree lands sends it, if the leaf turns out to be writable. */
+        bool verified = true;
+        std::atomic<bool> held { false };
+
         /*  Per argument, for a toggle: the state last given to the wire (0 or
             1), or -1 when that is not known: at the start, after the device
             said something itself, after it came back from a restart. A host
@@ -366,6 +429,15 @@ namespace oqa::core
         std::string detail;
         std::string renamedTo;
         bool mayDrive = true;       // a sending slot joins its group's driven arguments
+
+        /*  Pending because the device serves its tree a part at a time and has
+            not served this part: the one pending slot whose moves still go out,
+            as they always did. Pending for any other reason (no tree yet, the
+            device not identified), the tree has not said whether the leaf may
+            be written, and nothing is sent to it until it has (the retest's
+            2.1: a read-only leaf was written once at connection, before its
+            ACCESS was read). See Group::verified. */
+        bool lazyPart = false;
         bool mayReceive = true;     // a receiving slot is delivered to
 
         /*  The device's own RANGE for the argument, when the tree has one (6a-2):
@@ -800,7 +872,7 @@ namespace oqa::core
             identity leaf when the chunk names one, then by the tree hash when
             the chunk has one. One left is adopted; none or several stay for
             the user, listed in the status. */
-        void search (const std::vector<oscquery::Finder::Candidate>& found)
+        void search (const std::vector<oscquery::Finder::Candidate>& found, const std::vector<Wanted>& wanted = {})
         {
             DeviceRef r;
 
@@ -937,7 +1009,61 @@ namespace oqa::core
 
             if (matching.size() == 1)
             {
-                const auto& chosen = infos[matching.front()];
+                auto& chosen = infos[matching.front()];
+
+                /*  THE ONE CANDIDATE UNDER THE NAME IS ADOPTED IF IT SERVES WHAT
+                    THE SESSION IS BOUND TO (decided 2026-11-11, after Julien
+                    Bayle's retest of ec6725c, 2.5). Not "if its tree hash is the
+                    saved one": the hash moves whenever the tree does, a source
+                    added, a processor still starting, and a session opened
+                    before its processor would wait for ever. But a device that
+                    serves none of the bound paths is another device under the
+                    same name, or one not ready yet: it is listed, looked at
+                    again every few seconds, adopted by itself the day it serves
+                    them, and the user may point at it meanwhile. A candidate
+                    already told apart by its tree hash is the saved tree, and is
+                    not asked again. */
+                if (! wanted.empty() && ! chosen.hashMatch)
+                {
+                    const auto candidateKey = chosen.host + ":" + std::to_string (chosen.port);
+                    const auto now = std::chrono::steady_clock::now();
+                    auto& seen = servesChecked[candidateKey];
+
+                    if (seen.at == std::chrono::steady_clock::time_point {} || now - seen.at >= std::chrono::seconds (4))
+                    {
+                        seen.at = now;
+                        seen.unserved = unservedAt (chosen.host, chosen.port, wanted);
+                    }
+
+                    chosen.servesKnown = seen.unserved.has_value();
+                    chosen.unserved = seen.unserved.value_or (static_cast<int> (wanted.size()));
+
+                    if (! seen.unserved.has_value() || *seen.unserved > 0)
+                    {
+                        const auto where = chosen.host + ":" + std::to_string (chosen.port);
+                        const auto note = seen.unserved.has_value()
+                            ? "device \"" + r.name + "\": found at " + where + ", which does not serve " + std::to_string (*seen.unserved)
+                              + " of the " + std::to_string (wanted.size()) + " bound paths; waiting for it to, or point at it to use it as it is"
+                            : "device \"" + r.name + "\": found at " + where + ", whose tree cannot be read yet; waiting";
+
+                        bool changed = false;
+
+                        {
+                            const std::lock_guard<std::mutex> guard (settingsLock);
+                            changed = resolution != Resolution::unresolved || resolutionNoteText != note;
+                            resolution = Resolution::unresolved;
+                            candidates = infos;
+                            resolutionNoteText = note;
+                        }
+
+                        if (changed && onRebuild)
+                            onRebuild (*this);
+
+                        return;
+                    }
+                }
+
+                servesChecked.clear();
                 setAddress (chosen.host, chosen.port, false);
 
                 /*  Kept after the move: how the choice was made. */
@@ -1135,6 +1261,7 @@ namespace oqa::core
                         if (! ancestorsLoaded (tree, slot.path))
                         {
                             out.detail = "the device has not served this part of its tree yet";
+                            out.lazyPart = true;
                             return;
                         }
 
@@ -1516,6 +1643,8 @@ namespace oqa::core
                     entry->setProperty ("port", c.port);
                     entry->setProperty ("id_known", c.idKnown);
                     entry->setProperty ("id_match", c.idMatch);
+                    entry->setProperty ("serves_known", c.servesKnown);
+                    entry->setProperty ("unserved", c.unserved);
                     entry->setProperty ("identity", juce::String (c.identity));
                     entry->setProperty ("identity_match", c.identityMatch);
                     entry->setProperty ("hash_known", c.hashKnown);
@@ -1932,8 +2061,24 @@ namespace oqa::core
 
             seenGroupsRevision = revision;
 
+            /*  What the groups being replaced still owed the device: a move
+                handed to one and not sent yet, or kept back because its leaf
+                was unverified (Group::verified). Carried to the group that
+                takes its place, here on the one thread that drains and sends,
+                so that a move made as the tree arrives is not lost between
+                the two. */
+            std::set<std::pair<std::uint32_t, std::string>> owed;
+
+            for (const auto& g : groups)
+                if (g->dirty.load (std::memory_order_relaxed) || g->held.load (std::memory_order_relaxed))
+                    owed.insert ({ g->instanceId, g->path });
+
             const std::lock_guard<std::mutex> guard (groupsLock);
             groups = allGroups;
+
+            for (const auto& g : groups)
+                if (owed.count ({ g->instanceId, g->path }) != 0)
+                    g->dirty.store (true, std::memory_order_relaxed);
 
             std::size_t maxKey = 0;
 
@@ -2034,6 +2179,21 @@ namespace oqa::core
 
             ensureSender();
 
+            /*  To a device that answers, nothing for a leaf the tree has not
+                vouched for yet (Group::verified). A device that does not
+                answer is told nothing anyway, and its moves are counted below. */
+            if (senderReady.load (std::memory_order_relaxed))
+            {
+                for (auto* g : due)
+                    if (! g->verified)
+                        g->held.store (true, std::memory_order_relaxed);
+
+                std::erase_if (due, [] (const Group* g) { return ! g->verified; });
+
+                if (due.empty())
+                    return;
+            }
+
             /*  The loop guard's reference: what goes out now may come back
                 over LISTEN within the window. Stamped whether the send below
                 succeeds or not; an unsent value echoes nothing. */
@@ -2053,7 +2213,7 @@ namespace oqa::core
 
             for (auto* g : due)
             {
-                if (g->critical && tcp == nullptr)
+                if (g->critical && tcp == nullptr && g->verified)
                 {
                     std::vector<Value> args;
 
@@ -2255,6 +2415,11 @@ namespace oqa::core
         std::string identityLive;
         std::string deviceIdLive;                   // the DEVICE_ID the device at the address declares, when it does
         std::string duplicateNoteText;              // another live device declaring it, when one is seen
+
+        /*  Per candidate address: when its tree was last read against the
+            bound paths, and what that found. The resolver's thread only. */
+        struct ServesCheck { std::chrono::steady_clock::time_point at {}; std::optional<int> unserved; };
+        std::map<std::string, ServesCheck> servesChecked;
         std::string resolutionNoteText;
         bool handPointed = false;
         bool timingByHand = false;              // under settingsLock
@@ -2563,7 +2728,7 @@ namespace oqa::core
                         return;
 
                     if (entry->needsSearch())
-                        entry->search (candidates);
+                        entry->search (candidates, owner.wantedOf (entry));
                 }
             }
 
@@ -2754,6 +2919,35 @@ namespace oqa::core
                 out.add (juce::String (text));
 
             return out;
+        }
+
+        /*  What the sessions in this process are bound to on `entry`: every
+            bound slot of every instance whose chunk names that device, once
+            each. From the chunks, not the plans: a slot whose device was never
+            reached has no plan yet, and it is the one that most needs asking
+            about. The resolver's thread; takes the registry's lock. */
+        std::vector<Wanted> wantedOf (const DeviceEntry* entry)
+        {
+            const std::lock_guard<std::mutex> guard (lock);
+            std::set<Wanted> wanted;
+
+            for (const auto& [id, record] : instances)
+            {
+                if (record->lastChunk == nullptr)
+                    continue;
+
+                for (const auto& slot : record->lastChunk->slots.all())
+                {
+                    if (! slot.bound() || slot.deviceIndex < 0
+                        || slot.deviceIndex >= static_cast<int> (record->deviceByIndex.size())
+                        || record->deviceByIndex[static_cast<std::size_t> (slot.deviceIndex)] != entry)
+                        continue;
+
+                    wanted.insert ({ slot.path, slot.argIndex, slot.type });
+                }
+            }
+
+            return { wanted.begin(), wanted.end() };
         }
 
         DeviceEntry& entryFor (const DeviceRef& ref)
@@ -3337,6 +3531,8 @@ namespace oqa::core
 
             if (drives)
             {
+                group->verified = group->verified && (check.state != SlotState::pending || check.lazyPart);
+
                 /*  Only a sending slot is posted by the audio thread. */
                 group->driven[arg] = true;
                 plan->groupOfSlot[static_cast<std::size_t> (slot.hostParamId)] = group.get();

@@ -49,6 +49,7 @@
 #include <core/registry/RegistryApi.h>
 #include <core/rt/RtCheck.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -171,12 +172,24 @@ namespace oqa::core
         //==============================================================================
         //  The audio thread.
 
-        /*  `normalised[i]` is slot i's host value. Posts what moved since the
-            last block (everything, the first block after a change of
-            bindings), then ends the block. A value equal to the last one
-            received from the device for that slot is not posted: a slot whose
-            direction is both does not echo the device back to itself. */
+        /*  `normalised[i]` is slot i's host value. Posts what the host MOVED
+            since the last block, then ends the block. A value equal to the
+            last one received from the device for that slot is not posted: a
+            slot whose direction is both does not echo the device back to
+            itself.
+
+            WHAT IS NOT A MOVE (decided 2026-11-11, after Julien Bayle's retest
+            of ec6725c, 2.1): connecting, binding, and a session being loaded.
+            Opening a project used to push every slot's saved value onto the
+            device, a live renderer included. Now the first block after a state
+            load only notes where the host stands. The device is told when the
+            host moves, and once for every slot when the transport starts
+            (setPlaying), as a sequencer chases its controllers: without that a
+            lane that holds its value from the first bar would never be sent. */
         void processBlock (const float* normalised, int valueCount) noexcept OQA_AUDIO_THREAD;
+
+        /** The host's transport, told before each processBlock by a shim that knows it. Audio thread. */
+        void setPlaying (bool playing) noexcept OQA_AUDIO_THREAD { playingNow = playing; }
 
         //==============================================================================
         //  Record (Phase 4). Values the devices stream for this instance's
@@ -187,8 +200,27 @@ namespace oqa::core
 
         void setReceiveWake (std::function<void()> wake);
 
-        /** Calls `apply (slot, normalised)` for each value waiting, oldest first; returns how many. */
+        /** Calls `apply (slot, normalised)` for each value waiting, oldest first; returns how many were applied. */
         int pollReceived (const std::function<void (int slot, float normalised)>& apply);
+
+        /*  THE HOST HAS THE WORD WHILE IT IS MOVING A SLOT (decided 2026-11-11;
+            the retest's 2.3 and 2.6). A value from the device for a slot the
+            host moved less than hostHoldMs ago is not applied over the move:
+            it is kept aside. When the hold ends, a device that ended up
+            elsewhere is told the host's value again; one that agrees is left
+            alone. Outside a hold the device is followed, as before.
+
+            `hostNow`, when a shim on the message thread can give it, is what
+            each host parameter reads this instant. A value there that the
+            audio thread has not seen yet, and that is not the device's own
+            last value, is a move still on its way to processBlock: applying
+            the device's value now would erase it before it was ever sent. */
+        int pollReceived (const float* hostNow, int hostCount,
+                          void (*apply) (int slot, float normalised, void* context), void* context) noexcept;
+        int pollReceived (const float* hostNow, int hostCount, const std::function<void (int slot, float normalised)>& apply);
+
+        /** How long after its last move the host keeps the word on a slot. 200 ms by default; 0 turns the hold off. */
+        void setHostHoldMs (int milliseconds) noexcept { hostHoldMs.store (std::max (0, milliseconds), std::memory_order_relaxed); }
 
         /*  The same with a function pointer and a context, for a caller on
             the audio thread (the CLAP shim drains in process and flush): no
@@ -298,7 +330,18 @@ namespace oqa::core
 
         //  The audio thread's own.
         std::vector<float> lastPosted;
-        std::atomic<bool> postEverything { true };
+        bool playingNow = false, wasPlaying = false;
+
+        /** Set by a state load: the next block notes where the host stands and posts nothing. */
+        std::atomic<bool> rebaseline { false };
+
+        /*  Per slot, shared with the message thread: the host value the audio
+            thread last saw, when the host last moved it (steady milliseconds),
+            and the device's value kept aside during a hold (NaN: none). */
+        std::unique_ptr<std::atomic<float>[]> seen;
+        std::unique_ptr<std::atomic<std::int64_t>[]> lastMoveMs;
+        std::unique_ptr<std::atomic<float>[]> deferred;
+        std::atomic<int> hostHoldMs { 200 };
 
         //  Record: written on the message thread, read by the audio thread and the editor.
         std::function<void()> receiveWake;

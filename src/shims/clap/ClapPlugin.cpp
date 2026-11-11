@@ -179,6 +179,9 @@ namespace oqa::clapshim
     {
         const core::rt::ScopedRealtimeCheck region;
 
+        //  The transport, for the one send of every slot when it starts (Instance::processBlock).
+        core.setPlaying (process->transport != nullptr && (process->transport->flags & CLAP_TRANSPORT_IS_PLAYING) != 0);
+
         applyEvents (process->in_events);
         drainReceived (process->out_events);
 
