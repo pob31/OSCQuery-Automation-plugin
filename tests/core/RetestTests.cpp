@@ -417,8 +417,15 @@ TEST_CASE ("retest 2.3 and 2.6: while the host is moving a slot the device's val
     float values[4] = {};
     one.processBlock (values, 4);
 
+    /*  The hold is set long where a step must fall inside it and short where
+        it must have run out, so that no step depends on how fast the machine
+        is (a CI runner took longer than 200 ms between two of them). */
+    const auto holding = [&] { one.setHostHoldMs (5000); };
+    const auto letTheHoldRunOut = [&] { one.setHostHoldMs (50); sleepMs (150); };
+
     /*  The host moves to 0.8. The device, at that moment, went to 0.2 (a
         crossing): heard, and not applied over the host's move. */
+    holding();
     values[0] = 0.8f;
     one.processBlock (values, 4);
     REQUIRE (waitUntil ([&] { return sent (rig) == 1; }));
@@ -430,7 +437,7 @@ TEST_CASE ("retest 2.3 and 2.6: while the host is moving a slot the device's val
     CHECK (applied.empty());
 
     /*  The hold runs out with the device elsewhere: it is told the host's value again. */
-    sleepMs (260);
+    letTheHoldRunOut();
     one.processBlock (values, 4);
     REQUIRE (waitUntil ([&] { return sent (rig) == 2; }));
 
@@ -442,7 +449,7 @@ TEST_CASE ("retest 2.3 and 2.6: while the host is moving a slot the device's val
     }
 
     /*  A device that ends where the host is, is left alone. */
-    sleepMs (260);
+    holding();
     values[0] = 0.6f;
     one.processBlock (values, 4);
     REQUIRE (waitUntil ([&] { return sent (rig) == 3; }));
@@ -451,7 +458,7 @@ TEST_CASE ("retest 2.3 and 2.6: while the host is moving a slot the device's val
     REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.6) }));
     REQUIRE (waitUntil ([&] { return heard() > before; }));
     CHECK (poll() == 0);
-    sleepMs (260);
+    letTheHoldRunOut();
     one.processBlock (values, 4);
     sleepMs (80);
     CHECK (sent (rig) == 3);
