@@ -148,9 +148,15 @@ namespace oqa::core::server
         stop();
     }
 
+    /*  The process, not the module: `currentExecutableFile` is found from a
+        symbol of JUCE's own, which lives in the shared core library, so it
+        named that library ("libOSCQuery-Automation-Core") in every host and
+        every DAW on a machine served one NAME and one DEVICE_ID (Julien Bayle's
+        retest of ec6725c, 2.11). `hostApplicationPath` is the executable that
+        loaded the plugin. */
     std::string PluginServer::hostApplicationName()
     {
-        return juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFileNameWithoutExtension().toStdString();
+        return juce::File::getSpecialLocation (juce::File::hostApplicationPath).getFileNameWithoutExtension().toStdString();
     }
 
     std::string PluginServer::defaultName()
