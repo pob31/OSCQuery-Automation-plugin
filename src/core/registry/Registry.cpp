@@ -39,6 +39,7 @@
 #include <oscquery/osc/FixedEncoder.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -281,6 +282,14 @@ namespace oqa::core
 
         std::atomic<bool> dirty { false };
 
+        /*  Per argument, for a toggle: the state last given to the wire (0 or
+            1), or -1 when that is not known: at the start, after the device
+            said something itself, after it came back from a restart. A host
+            move that leaves the state where it is has nothing to send: 0.2,
+            0.4 and 0.49 are one F, not three (Julien Bayle's retest of
+            ec6725c, 2.12). Network thread; the Device thread writes -1. */
+        std::unique_ptr<std::atomic<std::int8_t>[]> toggleSent;
+
         /** When this group was last sent (steady clock): the loop guard's reference. 0: never. */
         std::atomic<std::int64_t> lastSentNanos { 0 };
 
@@ -418,6 +427,19 @@ namespace oqa::core
             for, called under the registry's lock so it cannot outlive the
             instance. Full is a counted drop, as the send ring's is. */
         ChangeRing<incomingCapacity> incoming;
+
+        /*  When the ring is full, the value that does not fit is the newest,
+            and it is the one that matters: the host would otherwise settle on
+            whatever was 4096 values ago (a message thread held by a modal
+            dialog while a device streams; Julien Bayle's retest of ec6725c,
+            2.8). So the latest value per slot is held here instead and handed
+            over once the ring is empty. NaN: nothing held. The writer clears a
+            slot's entry before it pushes a newer value, so what is held is
+            never older than what is in the ring. */
+        struct Held { std::atomic<float> value { std::numeric_limits<float>::quiet_NaN() }; };
+        std::array<Held, 128> held;
+        std::atomic<std::uint64_t> heldOver { 0 };
+
         void (*wake) (void* context) = nullptr;
         void* wakeContext = nullptr;
         std::atomic<std::uint64_t> received { 0 };
@@ -1356,6 +1378,9 @@ namespace oqa::core
                     if (! g->driven[i])
                         g->latest[i].store (boolean ? (v.getBool() ? 1.0 : 0.0) : v.asDouble(), std::memory_order_relaxed);
 
+                    //  The device has spoken: what the host last sent is no longer known to be its state (2.12).
+                    g->toggleSent[i].store (-1, std::memory_order_relaxed);
+
                     if (g->receiver[i] < 0)
                         continue;
 
@@ -1609,6 +1634,23 @@ namespace oqa::core
             {
                 using State = oscquery::Device::State;
 
+                /*  Gone and back: HOST_INFO was read anew, and OSC_PORT is the
+                    device's word at each connection, not a constant. A server
+                    restarted on the same HTTP port with another OSC port was
+                    still sent to at the old one, every write lost in silence
+                    (Julien Bayle's retest of ec6725c, 2.4). The network thread
+                    owns the sockets and reopens them. */
+                if (state == State::Reconnecting || state == State::Unreachable)
+                {
+                    wentAway.store (true, std::memory_order_release);
+                }
+                else if ((state == State::Reachable || state == State::TreeLoaded || state == State::Listening)
+                         && wentAway.exchange (false, std::memory_order_acq_rel))
+                {
+                    senderStale.store (true, std::memory_order_release);
+                    wake.signal();
+                }
+
                 if (state == State::Reachable || state == State::TreeLoaded || state == State::Listening)
                 {
                     noteSeen();
@@ -1809,6 +1851,20 @@ namespace oqa::core
             and OSC_PORT, or the TCP sender when OSC_TRANSPORT says so. */
         void ensureSender()
         {
+            /*  The device came back from a restart or a lost connection: the
+                sender is opened again from the HOST_INFO just read (2.4), and
+                what each toggle was last told is no longer known (2.12). */
+            if (senderStale.exchange (false, std::memory_order_acq_rel))
+            {
+                senderReady.store (false, std::memory_order_release);
+                udp.close();
+                tcp.reset();
+
+                for (const auto& g : groups)
+                    for (std::size_t i = 0; i < g->argCount(); ++i)
+                        g->toggleSent[i].store (-1, std::memory_order_relaxed);
+            }
+
             if (senderReady.load (std::memory_order_relaxed))
                 return;
 
@@ -1930,7 +1986,18 @@ namespace oqa::core
                     if (g->instanceId == change.instance)
                         for (std::size_t i = 0; i < g->argCount(); ++i)
                             if (g->driven[i] && g->slots[i].hostParamId == change.slot)
+                            {
+                                //  A toggle whose state the move does not change says nothing new (2.12).
+                                if (g->slots[i].isToggle())
+                                {
+                                    const std::int8_t state = change.normalised >= 0.5f ? 1 : 0;
+
+                                    if (g->toggleSent[i].exchange (state, std::memory_order_relaxed) == state)
+                                        continue;
+                                }
+
                                 g->dirty.store (true, std::memory_order_relaxed);
+                            }
             }
 
             return any;
@@ -2204,6 +2271,8 @@ namespace oqa::core
         oscquery::net::RawUdpSender udp;
         std::unique_ptr<oscquery::net::TcpSender> tcp;
         std::atomic<bool> senderReady { false };
+        std::atomic<bool> wentAway { false };       // the Device lost its device and has not got it back yet
+        std::atomic<bool> senderStale { false };    // it got it back: the sender is reopened from the new HOST_INFO
 
         mutable std::mutex groupsLock;
         std::vector<std::shared_ptr<Group>> allGroups;
@@ -2805,7 +2874,19 @@ namespace oqa::core
                     continue;
 
                 auto* instance = found->second.get();
-                instance->incoming.push ({ d.instance, static_cast<std::uint16_t> (d.slot), SlotChange::value, d.normalised });
+                const auto slot = static_cast<std::size_t> (d.slot);
+                const bool holdable = slot < instance->held.size();
+
+                //  A newer value is on its way in: whatever was held for the slot is older (2.8).
+                if (holdable)
+                    instance->held[slot].value.store (std::numeric_limits<float>::quiet_NaN(), std::memory_order_release);
+
+                if (! instance->incoming.push ({ d.instance, static_cast<std::uint16_t> (d.slot), SlotChange::value, d.normalised }) && holdable)
+                {
+                    instance->held[slot].value.store (d.normalised, std::memory_order_release);
+                    instance->heldOver.fetch_add (1, std::memory_order_relaxed);
+                }
+
                 instance->received.fetch_add (1, std::memory_order_relaxed);
 
                 if (instance != last)
@@ -3291,6 +3372,10 @@ namespace oqa::core
 
             group->known = std::make_unique<std::atomic<float>[]> (n);
             group->latest = std::make_unique<std::atomic<double>[]> (n);
+            group->toggleSent = std::make_unique<std::atomic<std::int8_t>[]> (n);
+
+            for (std::size_t i = 0; i < n; ++i)
+                group->toggleSent[i].store (-1, std::memory_order_relaxed);
             group->initial = group->device->initialValues (group->path, n);
 
             for (std::size_t i = 0; i < n; ++i)
@@ -3447,11 +3532,36 @@ namespace oqa::core
         int n = 0;
         SlotChange change;
 
-        while (n < capacity && instance->incoming.pop (change))
+        bool emptied = false;
+
+        while (n < capacity)
         {
+            if (! instance->incoming.pop (change))
+            {
+                emptied = true;
+                break;
+            }
+
             slots[n] = change.slot;
             values[n] = change.normalised;
             ++n;
+        }
+
+        /*  The ring is empty: what did not fit in it while it was full, the
+            latest value per slot, comes last, as it is the newest (2.8). */
+        if (emptied)
+        {
+            for (std::size_t slot = 0; slot < instance->held.size() && n < capacity; ++slot)
+            {
+                const auto value = instance->held[slot].value.exchange (std::numeric_limits<float>::quiet_NaN(), std::memory_order_acq_rel);
+
+                if (! std::isnan (value))
+                {
+                    slots[n] = static_cast<int> (slot);
+                    values[n] = value;
+                    ++n;
+                }
+            }
         }
 
         return n;

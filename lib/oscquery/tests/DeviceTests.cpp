@@ -648,3 +648,76 @@ TEST_CASE ("device: OSC goes out over the websocket as a binary frame")
 
     device.stop();
 }
+
+//==============================================================================
+//  Julien Bayle's retest of ec6725c, 2.7: a device that was gone long enough to
+//  be Unreachable came back with the tree it had before, whatever it served now.
+TEST_CASE ("device: back from Unreachable, the tree is read again, so an ACCESS the device changed meanwhile is seen")
+{
+    /*  A port of the test's choosing, so the device restarts where it was. */
+    int port = 0;
+
+    {
+        oqatest::MockDevice probe;
+        REQUIRE (probe.loadTree (loadFixture()));
+        REQUIRE (probe.start());
+        port = probe.httpPort();
+        probe.stop();
+    }
+
+    oqatest::MockDevice::Options options;
+    options.httpPort = port;
+    oqatest::MockDevice mock (options);
+    const auto fixture = loadFixture();
+    REQUIRE (mock.loadTree (fixture));
+    REQUIRE (mock.start());
+    REQUIRE (mock.httpPort() == port);
+
+    Seen seen;
+    Device device (optionsFor (port));
+    device.setCallbacks (seen.callbacks());
+    device.start();
+    REQUIRE (reaches (device, Device::State::Listening));
+
+    const auto path = pathOf (first (fixture, isFloatLeaf, "f leaf"));
+
+    const auto accessNow = [&]
+    {
+        int access = -1;
+        device.withTree ([&] (const Tree& tree)
+        {
+            if (const auto* node = tree.find (path))
+                access = node->effectiveAccess();
+        });
+        return access;
+    };
+
+    REQUIRE ((accessNow() & 2) != 0);
+
+    /*  The device goes away, and while it is away decides nobody may write. */
+    mock.setAllowList (juce::StringArray { "192.0.2.99" });
+    mock.stop();
+    REQUIRE (waitUntil ([&] { return seen.sawState (Device::State::Unreachable); }));
+
+    bool back = false;
+
+    for (int tries = 0; tries < 50 && ! back; ++tries)
+    {
+        back = mock.start() && mock.httpPort() == port;
+
+        if (! back)
+        {
+            mock.stop();
+            juce::Thread::sleep (100);
+        }
+    }
+
+    REQUIRE (back);
+    REQUIRE (reaches (device, Device::State::Listening));
+
+    /*  What it serves now, not what it served before. */
+    REQUIRE (waitUntil ([&] { return (accessNow() & 2) == 0; }));
+    CHECK ((accessNow() & 1) != 0);
+
+    device.stop();
+}

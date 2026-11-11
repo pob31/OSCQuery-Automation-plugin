@@ -468,7 +468,15 @@ namespace oqa::oscquery
                 isLarge = large;
             }
 
-            const bool reconnecting = current == State::Reconnecting;
+            /*  Back from a broken connection, or from a device that did not
+                answer at all for a while: either way it may have restarted,
+                and the tree held from before is not known to be what it
+                serves now. Only the first was read again; a server down for
+                a second, long enough for one probe to fail, came back with
+                its old tree, a changed ACCESS unseen (Julien Bayle's retest
+                of ec6725c, 2.7). */
+            const bool reconnecting = current == State::Reconnecting
+                                      || (current == State::Unreachable && haveTree);
 
             if (current == State::Unprobed || current == State::Unreachable || reconnecting)
             {

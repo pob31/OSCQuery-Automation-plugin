@@ -34,6 +34,7 @@ add_executable(oqa_core_tests
     GestureTests.cpp
     LoaderTests.cpp
     StaleTests.cpp
+    RetestTests.cpp
     ReidentifyTests.cpp
     ImportTests.cpp
     FailureStatesTests.cpp
