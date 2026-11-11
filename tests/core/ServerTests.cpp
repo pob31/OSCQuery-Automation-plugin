@@ -419,3 +419,16 @@ TEST_CASE ("plugin server: the DEVICE_ID is one per seed and per host applicatio
 
     folder.deleteRecursively();
 }
+
+//==============================================================================
+//  Julien Bayle's retest of ec6725c, 2.11: the name is the process's, not a library's.
+TEST_CASE ("plugin server: the host application is the process that loaded the plugin, in the NAME and under the DEVICE_ID")
+{
+    const auto host = oqa::core::server::PluginServer::hostApplicationName();
+    const auto process = juce::File::getSpecialLocation (juce::File::hostApplicationPath).getFileNameWithoutExtension().toStdString();
+
+    CHECK (host == process);
+    CHECK_FALSE (host.empty());
+    CHECK (host.find ("OSCQuery-Automation-Core") == std::string::npos);      // never the shared core library
+    CHECK (juce::String (oqa::core::server::PluginServer::defaultName()).endsWith ("(" + juce::String (process) + ")"));
+}

@@ -612,3 +612,79 @@ TEST_CASE ("receive: a saved chunk with receiving slots records through the regi
     sleepMs (100);
     CHECK (poll (one, got) == 0);
 }
+
+//==============================================================================
+//  Julien Bayle's retest of ec6725c, 2.2: what the device last sent is not a
+//  value the host may never send again.
+TEST_CASE ("receive: the host moving back to the value the device last sent is sent; a toggle the device left off can be switched on and off again")
+{
+    Rig rig;
+    const auto& gain = rig.leafWhere (isRangedFloat);
+    const auto& mute = rig.leafWhere (isToggle);
+
+    Instance one (api(), 4, "back-to-received");
+    const int device = one.addDevice (rig.device ("back-to-received"));
+    std::string why;
+    REQUIRE (one.bind (0, gain, 0, device, why));
+    REQUIRE (one.bind (1, mute, 0, device, why));
+    one.setDirection (0, Direction::both);
+    one.setDirection (1, Direction::both);
+    one.connect();
+    rig.waitReady (one);
+    rig.settleListen (one, 2);
+
+    /*  The first block posts everything; let it land and be forgotten. */
+    float values[4] = { 0.25f, 0.0f, 0.0f, 0.0f };
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (rig.mock)) >= 2; }));
+    sleepMs (120);
+    Received got;
+    poll (one, got);
+    got.clear();
+    rig.mock.clearReceivedOsc();
+
+    const auto sent = [&] { return messagesIn (bundlesReceived (rig.mock)); };
+
+    /*  The device moves the float; the host follows and hands it back: not a move. */
+    const auto range = *gain.argument (0).range;
+    const float deviceValue = static_cast<float> (*range.min + 0.5 * (*range.max - *range.min));
+    REQUIRE (rig.mock.setValue (gain.fullPath, { static_cast<double> (deviceValue) }));
+    REQUIRE (waitUntil ([&] { return poll (one, got) > 0; }));
+    const float followed = got.back().second;
+    CHECK (followed == doctest::Approx (0.5f).epsilon (0.01));
+    values[0] = followed;
+    one.processBlock (values, 4);
+    sleepMs (80);
+    CHECK (sent() == 0);
+
+    /*  Away from it: sent. */
+    values[0] = 0.8f;
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent() == 1; }));
+
+    /*  And back to exactly what the device had sent: sent too. The device holds 0.8 until it is. */
+    sleepMs (80);                                       // past the loop guard, so nothing here is its doing
+    values[0] = followed;
+    one.processBlock (values, 4);
+    REQUIRE (waitUntil ([&] { return sent() == 2; }));
+
+    /*  The toggle, which the device says is off. */
+    rig.mock.clearReceivedOsc();
+    got.clear();
+    REQUIRE (rig.mock.setValue (mute.fullPath, { false }));
+    sleepMs (120);
+    poll (one, got);
+
+    for (int round = 1; round <= 3; ++round)
+    {
+        values[1] = 1.0f;
+        one.processBlock (values, 4);
+        REQUIRE (waitUntil ([&] { return sent() == 2 * round - 1; }));
+        sleepMs (80);
+
+        values[1] = 0.0f;                               // off again: the value the device last sent
+        one.processBlock (values, 4);
+        REQUIRE (waitUntil ([&] { return sent() == 2 * round; }));
+        sleepMs (80);
+    }
+}

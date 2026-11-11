@@ -896,12 +896,21 @@ namespace oqa::core
                 /*  The host handing back what the device just sent (a slot
                     whose direction is both) is not a move to send. NaN, for a
                     slot that never received, compares false. */
-                const auto fromDevice = received[static_cast<std::size_t> (i)].load (std::memory_order_relaxed);
+                auto fromDevice = received[static_cast<std::size_t> (i)].load (std::memory_order_relaxed);
 
                 if (! everything && std::abs (value - fromDevice) <= 1.0e-6f)
                     continue;
 
                 api->instancePost (handle, i, value);
+
+                /*  Once the host has sent something else, what the device said
+                    before is no longer what it holds: forgotten, so that the
+                    host moving BACK to that value is sent like any other move.
+                    Kept, a toggle the device last sent as off could be switched
+                    on and never off again (Julien Bayle's retest of ec6725c,
+                    2.2). Only if no newer value arrived in between: the message
+                    thread writes this too. */
+                received[static_cast<std::size_t> (i)].compare_exchange_strong (fromDevice, notReceived, std::memory_order_relaxed);
             }
         }
 
