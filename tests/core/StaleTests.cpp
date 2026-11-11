@@ -276,9 +276,12 @@ TEST_CASE ("stale: a chunk reopened against a tree missing one of its paths has 
     shrunk.waitReady (one);
     REQUIRE (waitUntil ([&] { return slotState (one, 0) == "ok" && slotState (one, 1) == "missing"; }));
 
-    /*  Both lanes move; one message, for the live slot. */
+    /*  Both lanes move (after the block that notes where a loaded session
+        stands); one message, for the live slot. */
     shrunk.mock.clearReceivedOsc();
-    float values[4] = { 0.6f, 0.6f, 0.0f, 0.0f };
+    float values[4] = {};
+    one.processBlock (values, 4);
+    values[0] = values[1] = 0.6f;
     one.processBlock (values, 4);
     REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (shrunk.mock)) >= 1; }));
     sleepMs (100);
@@ -365,9 +368,11 @@ TEST_CASE ("stale: ACCESS as reported to this client: a leaf the device lets us 
     sleepMs (100);
     CHECK (restricted.mock.receivedOsc().empty());
 
-    /*  Still received from: the restricted device moving the leaf reaches the both slot. */
+    /*  Still received from: the restricted device moving the leaf reaches the
+        both slot, once the host's hold on the slot it just moved has run out. */
     restricted.waitListening (one, restrictedDevice);
     restricted.settleListen (one, 1, restrictedDevice);
+    sleepMs (250);
     const auto& range = *gain.argument (0).range;
     REQUIRE (restricted.mock.setValue (gain.fullPath, { *range.min + 0.25 * (*range.max - *range.min) }));
     std::vector<std::pair<int, float>> got;

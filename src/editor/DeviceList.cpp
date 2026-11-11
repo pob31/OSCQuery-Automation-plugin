@@ -362,7 +362,9 @@ namespace oqa::editor
                         candidate.state = juce::String ("candidate")
                                         + (idKnown ? (idMatch ? ", same DEVICE_ID" : ", other DEVICE_ID") : juce::String())
                                         + (ref.identityPath.has_value() && ! idMatch ? (identityMatch ? ", identity matches" : ", identity differs") : juce::String())
-                                        + (hashKnown ? (hashMatch ? ", same tree" : ", other tree") : juce::String());
+                                        + (hashKnown ? (hashMatch ? ", same tree" : ", other tree") : juce::String())
+                                        + (static_cast<bool> (c.getProperty ("serves_known", false)) && static_cast<int> (c.getProperty ("unserved", 0)) > 0
+                                               ? ", lacks " + juce::String (static_cast<int> (c.getProperty ("unserved", 0))) + " bound path(s)" : juce::String());
                         rows.push_back (candidate);
                     }
                 }

@@ -23,6 +23,7 @@
 #include <cmath>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 
@@ -31,6 +32,16 @@ namespace oqa::core
     namespace
     {
         constexpr float notReceived = std::numeric_limits<float>::quiet_NaN();
+
+        /** A slot the host never moved: long enough ago for any hold to be over. */
+        constexpr std::int64_t never = std::numeric_limits<std::int64_t>::min() / 2;
+
+        std::int64_t steadyMs() noexcept
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+
+        bool same (float a, float b) noexcept { return std::abs (a - b) <= 1.0e-6f; }       // false for NaN
 
         /** Whether the table reaches as far as `member`: an older library's stops short. */
         template <typename Member>
@@ -47,11 +58,20 @@ namespace oqa::core
     Instance::Instance (const OqaCoreApi* apiIn, int slotCountIn, std::string labelIn)
         : api (apiIn), count (std::max (0, slotCountIn)), label (std::move (labelIn)), state (count)
     {
-        lastPosted.assign (static_cast<std::size_t> (count), 0.0f);
-        received = std::make_unique<std::atomic<float>[]> (static_cast<std::size_t> (count));
+        const auto slots = static_cast<std::size_t> (count);
+        lastPosted.assign (slots, 0.0f);
+        received = std::make_unique<std::atomic<float>[]> (slots);
+        seen = std::make_unique<std::atomic<float>[]> (slots);
+        lastMoveMs = std::make_unique<std::atomic<std::int64_t>[]> (slots);
+        deferred = std::make_unique<std::atomic<float>[]> (slots);
 
-        for (int i = 0; i < count; ++i)
-            received[static_cast<std::size_t> (i)].store (notReceived, std::memory_order_relaxed);
+        for (std::size_t i = 0; i < slots; ++i)
+        {
+            received[i].store (notReceived, std::memory_order_relaxed);
+            seen[i].store (0.0f, std::memory_order_relaxed);
+            lastMoveMs[i].store (never, std::memory_order_relaxed);
+            deferred[i].store (notReceived, std::memory_order_relaxed);
+        }
     }
 
     Instance::~Instance()
@@ -483,12 +503,19 @@ namespace oqa::core
 
     int Instance::pollReceived (void (*apply) (int, float, void*), void* context) noexcept
     {
+        return pollReceived (nullptr, 0, apply, context);
+    }
+
+    int Instance::pollReceived (const float* hostNow, int hostCount, void (*apply) (int, float, void*), void* context) noexcept
+    {
         if (handle == nullptr || ! canReceive())
             return 0;
 
         int slots[64];
         float values[64];
         int total = 0;
+        const auto now = steadyMs();
+        const auto hold = static_cast<std::int64_t> (hostHoldMs.load (std::memory_order_relaxed));
 
         for (;;)
         {
@@ -496,20 +523,52 @@ namespace oqa::core
 
             for (int i = 0; i < n; ++i)
             {
-                if (slots[i] >= 0 && slots[i] < count)
+                if (slots[i] < 0 || slots[i] >= count)
+                    continue;
+
+                const auto slot = static_cast<std::size_t> (slots[i]);
+
+                /*  The host moved this slot a moment ago, or has moved it and
+                    the audio thread has not seen it yet: its move stands, and
+                    the device's value waits (see the header). */
+                bool hostMoving = hold > 0 && now - lastMoveMs[slot].load (std::memory_order_relaxed) < hold;
+
+                if (! hostMoving && hold > 0 && hostNow != nullptr && slots[i] < hostCount)
                 {
-                    received[static_cast<std::size_t> (slots[i])].store (values[i], std::memory_order_relaxed);
-
-                    if (apply != nullptr)
-                        apply (slots[i], values[i], context);
+                    const float host = hostNow[slots[i]];
+                    hostMoving = ! same (host, seen[slot].load (std::memory_order_relaxed))
+                              && ! same (host, received[slot].load (std::memory_order_relaxed));
                 }
-            }
 
-            total += n;
+                if (hostMoving)
+                {
+                    deferred[slot].store (values[i], std::memory_order_relaxed);
+                    continue;
+                }
+
+                received[slot].store (values[i], std::memory_order_relaxed);
+                ++total;
+
+                if (apply != nullptr)
+                    apply (slots[i], values[i], context);
+            }
 
             if (n < 64)
                 return total;
         }
+    }
+
+    int Instance::pollReceived (const float* hostNow, int hostCount, const std::function<void (int, float)>& apply)
+    {
+        if (! apply)
+            return pollReceived (hostNow, hostCount, nullptr, nullptr);
+
+        auto trampoline = [] (int slot, float normalised, void* context)
+        {
+            (*static_cast<const std::function<void (int, float)>*> (context)) (slot, normalised);
+        };
+
+        return pollReceived (hostNow, hostCount, trampoline, const_cast<std::function<void (int, float)>*> (&apply));
     }
 
     int Instance::pollReceived (const std::function<void (int, float)>& apply)
@@ -569,7 +628,7 @@ namespace oqa::core
             }
         }
 
-        postEverything.store (true, std::memory_order_release);
+        //  A change of bindings is not a move of the host's: nothing is posted for it (the retest's 2.1).
         bindingRevision.fetch_add (1, std::memory_order_acq_rel);
     }
 
@@ -582,6 +641,10 @@ namespace oqa::core
             return false;
 
         state = std::move (*loaded);
+
+        /*  The host is about to hold the values this state goes with: where
+            it stands on the next block is the session's, not a move. */
+        rebaseline.store (true, std::memory_order_release);
         push();
         return true;
     }
@@ -882,15 +945,53 @@ namespace oqa::core
             return;
 
         const auto n = std::min (valueCount, count);
-        const bool everything = postEverything.exchange (false, std::memory_order_acq_rel);
+        const bool noteOnly = rebaseline.exchange (false, std::memory_order_acq_rel);
+
+        /*  The transport starting: every slot is said once, moved or not. */
+        const bool started = playingNow && ! wasPlaying && ! noteOnly;
+        wasPlaying = playingNow;
+
+        const auto now = steadyMs();
+        const auto hold = static_cast<std::int64_t> (hostHoldMs.load (std::memory_order_relaxed));
 
         for (int i = 0; i < n; ++i)
         {
+            const auto slot = static_cast<std::size_t> (i);
             const float value = normalised[i];
-            auto& last = lastPosted[static_cast<std::size_t> (i)];
+            auto& last = lastPosted[slot];
+            seen[slot].store (value, std::memory_order_relaxed);
 
-            if (everything || value != last)
+            if (noteOnly)
             {
+                last = value;
+                continue;
+            }
+
+            if (! started && value == last)
+            {
+                /*  A hold that has run out with a value of the device's kept
+                    aside: a device that ended elsewhere is told the host's
+                    value again; one that agrees is simply believed. */
+                if (now - lastMoveMs[slot].load (std::memory_order_relaxed) >= hold)
+                {
+                    const auto kept = deferred[slot].load (std::memory_order_relaxed);
+
+                    if (! std::isnan (kept))
+                    {
+                        deferred[slot].store (notReceived, std::memory_order_relaxed);
+
+                        if (same (kept, value))
+                            received[slot].store (kept, std::memory_order_relaxed);
+                        else
+                            api->instancePost (handle, i, value);
+                    }
+                }
+
+                continue;
+            }
+
+            {
+                const bool moved = value != last;
                 last = value;
 
                 /*  The host handing back what the device just sent (a slot
@@ -898,10 +999,18 @@ namespace oqa::core
                     slot that never received, compares false. */
                 auto fromDevice = received[static_cast<std::size_t> (i)].load (std::memory_order_relaxed);
 
-                if (! everything && std::abs (value - fromDevice) <= 1.0e-6f)
+                if (! started && std::abs (value - fromDevice) <= 1.0e-6f)
                     continue;
 
                 api->instancePost (handle, i, value);
+
+                /*  A move of the host's own: it has the word on this slot for
+                    a while, and whatever the device said before is behind it. */
+                if (moved)
+                {
+                    lastMoveMs[slot].store (now, std::memory_order_relaxed);
+                    deferred[slot].store (notReceived, std::memory_order_relaxed);
+                }
 
                 /*  Once the host has sent something else, what the device said
                     before is no longer what it holds: forgotten, so that the

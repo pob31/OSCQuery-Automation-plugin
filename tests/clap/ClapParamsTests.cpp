@@ -210,10 +210,12 @@ TEST_CASE ("clap params: a parameter event reaches the device from process, and 
     REQUIRE (loadChunk (r.plugin, chunkWith (rig, "params-events", [&] (oqa::core::StateChunk& c) { REQUIRE (c.slots[0].bind (gain, 0, 0, why)); })));
     REQUIRE (waitSlotState (r.plugin, 0, "ok"));
 
-    /*  The first block posts everything bound once the plan is live; then
-        a move. */
+    /*  The first block after a state is loaded notes where the host stands
+        and sends nothing (decided 2026-11-11); then a move. */
     ProcessRig block;
-    REQUIRE (waitUntil ([&] { block.run (r.plugin); return messagesIn (bundlesReceived (rig.mock)) >= 1; }));
+    block.run (r.plugin);
+    juce::Thread::sleep (60);
+    CHECK (rig.mock.receivedOsc().empty());
     rig.mock.clearReceivedOsc();
 
     block.in.paramValue (0, 0.75, 17);

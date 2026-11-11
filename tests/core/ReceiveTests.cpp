@@ -304,6 +304,7 @@ TEST_CASE ("receive: a value echoed within the guard window is dropped and count
         const auto& gain = rig.leafWhere (isRangedFloat);
 
         Instance one (api(), 4, "guard-far");
+        one.setHostHoldMs (0);              // the loop guard alone: the host's hold on a slot it just moved is ReceiveHoldTests' subject
         const int device = one.addDevice (rig.device ("guard-far"));
         std::string why;
         REQUIRE (one.bind (0, gain, 0, device, why));
@@ -380,8 +381,7 @@ TEST_CASE ("receive: 32 slots in both directions follow a device streaming at 10
     rig.settleListen (one, 32);
 
     float values[32] = {};
-    one.processBlock (values, 32);
-    REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (rig.mock)) >= 32; }));
+    one.processBlock (values, 32);                       // where the host stands: nothing is sent for it
     sleepMs (50);
     Received got;
     poll (one, got);
@@ -633,10 +633,12 @@ TEST_CASE ("receive: the host moving back to the value the device last sent is s
     rig.waitReady (one);
     rig.settleListen (one, 2);
 
-    /*  The first block posts everything; let it land and be forgotten. */
+    /*  A first move of the float, to have something sent; let it land and
+        the host's hold on the slot run out. */
+    one.setHostHoldMs (50);
     float values[4] = { 0.25f, 0.0f, 0.0f, 0.0f };
     one.processBlock (values, 4);
-    REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (rig.mock)) >= 2; }));
+    REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (rig.mock)) >= 1; }));
     sleepMs (120);
     Received got;
     poll (one, got);

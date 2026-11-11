@@ -116,13 +116,13 @@ TEST_CASE ("registry: two instances on one device make one bundle per block, wit
     rig.waitReady (a);
     rig.waitReady (b);
 
-    /*  The first block posts everything bound; let it through, then count. */
+    /*  Nothing is sent at connection (decided 2026-11-11): a first block where the host stands still says nothing. */
     float valuesA[8] = {};
     float valuesB[8] = {};
     a.processBlock (valuesA, 8);
     b.processBlock (valuesB, 8);
-    REQUIRE (waitUntil ([&] { return messagesIn (bundlesReceived (rig.mock)) >= 2; }));
-    std::this_thread::sleep_for (std::chrono::milliseconds (20));
+    std::this_thread::sleep_for (std::chrono::milliseconds (60));
+    CHECK (rig.mock.receivedOsc().empty());
     rig.mock.clearReceivedOsc();
 
     constexpr int blocks = 25;
@@ -281,8 +281,9 @@ TEST_CASE ("registry: a block of many changes splits into bundles under the MTU"
 
     float values[32];
 
+    //  Every slot moved from where it stood (nought), so every one is sent.
     for (int i = 0; i < 32; ++i)
-        values[i] = i / 32.0f;
+        values[i] = (i + 1) / 33.0f;
 
     one.processBlock (values, 32);
 
@@ -385,8 +386,7 @@ TEST_CASE ("registry: the rate limiter holds a path to its rate and the last val
     rig.waitReady (one);
 
     float values[4] = {};
-    one.processBlock (values, 4);
-    REQUIRE (waitUntil ([&] { return ! rig.mock.receivedOsc().empty(); }));
+    one.processBlock (values, 4);                        // where the host stands: nothing is sent for it
     rig.mock.clearReceivedOsc();
 
     /*  Forty changes about a millisecond apart: at 20 Hz, one per 50 ms
@@ -595,8 +595,7 @@ TEST_CASE ("registry: from the post to the wire on loopback, measured")
     rig.waitReady (one);
 
     float values[4] = {};
-    one.processBlock (values, 4);
-    REQUIRE (waitUntil ([&] { return ! rig.mock.receivedOsc().empty(); }));
+    one.processBlock (values, 4);                        // where the host stands: nothing is sent for it
     std::this_thread::sleep_for (std::chrono::milliseconds (20));
     rig.mock.clearReceivedOsc();
 

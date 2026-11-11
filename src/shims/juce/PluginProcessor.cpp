@@ -118,6 +118,16 @@ namespace oqa::shim
         for (std::size_t i = 0; i < slots.size(); ++i)
             values[i] = slots[i]->getValue();
 
+        /*  The transport, where the host says: starting, every slot is told
+            to its device once (Instance::processBlock). A host with no play
+            head simply never starts. */
+        bool playing = false;
+
+        if (auto* head = getPlayHead())
+            if (const auto position = head->getPosition())
+                playing = position->getIsPlaying();
+
+        core.setPlaying (playing);
         core.processBlock (values.data(), slotCount);
     }
 
@@ -231,7 +241,13 @@ namespace oqa::shim
             then the value, as a hand on the fader would. */
         const auto now = juce::Time::getMillisecondCounterHiRes();
 
-        core.pollReceived ([this, now] (int slot, float normalised)
+        /*  What each parameter reads this instant: a move of the host's that
+            the audio thread has not seen yet must not be written over by a
+            value from the device (Instance::pollReceived). */
+        for (std::size_t i = 0; i < slots.size(); ++i)
+            hostNow[i] = slots[i]->getValue();
+
+        core.pollReceived (hostNow.data(), static_cast<int> (hostNow.size()), [this, now] (int slot, float normalised)
         {
             auto* parameter = slots[static_cast<std::size_t> (slot)];
 
