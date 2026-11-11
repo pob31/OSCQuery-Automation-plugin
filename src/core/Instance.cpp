@@ -611,6 +611,14 @@ namespace oqa::core
                     {
                         ref.honoursTimetags = static_cast<bool> (d.getProperty ("honours_timetags", ref.honoursTimetags));
                         ref.offsetMs = static_cast<double> (d.getProperty ("offset_ms", ref.offsetMs));
+                        ref.timetagsByHand = true;
+                    }
+                    else if (d.getProperty ("timetags_origin", "").toString() == "device")
+                    {
+                        /*  The device's own word (the optional CLOCK, 6x-5):
+                            saved as a chunk's value, not as a hand's, so the
+                            device may say otherwise next time. */
+                        ref.honoursTimetags = static_cast<bool> (d.getProperty ("honours_timetags", ref.honoursTimetags));
                     }
 
                     const auto resolution = d.getProperty ("resolution", "").toString();
@@ -626,6 +634,14 @@ namespace oqa::core
 
                     ref.lastHost = host;
                     ref.lastPort = port;
+
+                    /*  The device's DEVICE_ID as the registry holds it (6x-4):
+                        learnt from a device confirmed the old way, or from the
+                        one the user pointed at. A session saved before the
+                        field existed takes it here, on its first save. */
+                    if (const auto id = d.getProperty ("device_id", {}); id.isString() && id.toString().isNotEmpty())
+                        if (resolution == "pointed" || ! ref.deviceId.has_value())
+                            ref.deviceId = id.toString().toStdString();
                 }
             }
         }
@@ -652,6 +668,9 @@ namespace oqa::core
 
                 if (! device.treeHash.empty())
                     state.devices[i].treeHash = device.treeHash;
+
+                if (device.deviceId.has_value() && ! device.deviceId->empty())
+                    state.devices[i].deviceId = device.deviceId;
 
                 push();
 
@@ -731,6 +750,7 @@ namespace oqa::core
         auto& ref = state.devices[static_cast<std::size_t> (deviceIndex)];
         ref.honoursTimetags = honoursTimetags;
         ref.offsetMs = std::isfinite (offsetMs) ? offsetMs : 0.0;
+        ref.timetagsByHand = true;
         push();
 
         /*  By hand, process-wide: stands whatever chunk is pushed next. */

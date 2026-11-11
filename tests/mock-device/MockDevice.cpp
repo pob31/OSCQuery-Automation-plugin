@@ -477,6 +477,12 @@ namespace oqatest
                 extensions->setProperty (name, true);
 
             info->setProperty ("EXTENSIONS", juce::var (extensions));
+
+            //  Whatever else the test wants said, verbatim; not declared for it.
+            if (auto* extras = options.hostInfoExtras.getDynamicObject(); extras != nullptr && ! options.hostInfoExtras.isArray())
+                for (const auto& property : extras->getProperties())
+                    info->setProperty (property.name, property.value);
+
             return juce::var (info);
         }
 
@@ -940,6 +946,18 @@ namespace oqatest
     {
         const std::lock_guard<std::mutex> guard (impl->lock);
         impl->options.name = name;
+    }
+
+    void MockDevice::setHostInfoExtras (const juce::var& extras)
+    {
+        const std::lock_guard<std::mutex> guard (impl->lock);
+        impl->options.hostInfoExtras = extras;
+    }
+
+    void MockDevice::setExtensions (const juce::StringArray& extensions)
+    {
+        const std::lock_guard<std::mutex> guard (impl->lock);
+        impl->options.extensions = extensions;
     }
 
     void MockDevice::closeAllConnections()

@@ -24,8 +24,16 @@
     host, absent WS_PORT the HTTP port); EXTENSIONS as the one list of what the
     device serves, and a client that never assumes a feature it does not list.
 
-    THE PROFILE ADDS NO FIELD (decided 2026-11-04), and neither does this
-    struct: it holds what the proposal defines and keeps the rest in `raw`.
+    THE PROFILE ADDS NO FIELD (decided 2026-11-04): what the proposal defines
+    is held here and the rest is kept in `raw`.
+
+    TWO OPTIONAL EXTENSIONS BESIDE THE PROFILE (decided 2026-11-10; devplan
+    Phase 6x; docs/spec/extensions-draft-0.1.md): DEVICE_ID, a string the
+    device keeps for good, and CLOCK, what its time tags refer to and whether
+    it schedules by them. Each is read ONLY when EXTENSIONS lists it: a key
+    that is there without being declared is somebody else's key and stays in
+    `raw`. A declared one that is malformed is ignored, never a refusal. A
+    device with neither reads exactly as before.
 
     A device that lacks one of the three required fields is still parsed - the
     library copes with devices as they are - and `missing` names what C1 would
@@ -42,6 +50,28 @@
 
 namespace oqa::oscquery
 {
+    /*  The optional CLOCK extension, as declared: what disciplines the clock
+        the device's time tags refer to ("ntp", "ptp" or "local", lower-cased
+        as read; a value this library does not know is kept as given), which
+        domain or server when the device says, and whether a bundle's future
+        time tag is executed at that time (true) or the bundle applied on
+        arrival (false). The same struct is what a server is told to serve. */
+    struct ClockInfo
+    {
+        std::string source { "local" };
+        std::optional<std::string> domain;
+        bool scheduling = false;
+
+        bool operator== (const ClockInfo&) const = default;
+
+        /** The object HOST_INFO carries under CLOCK. */
+        juce::var toVar() const;
+    };
+
+    /** The names the two optional extensions go by, in EXTENSIONS and as keys. */
+    inline constexpr const char* deviceIdExtension = "DEVICE_ID";
+    inline constexpr const char* clockExtension = "CLOCK";
+
     struct HostInfo
     {
         std::string name;
@@ -62,6 +92,13 @@ namespace oqa::oscquery
 
         /** Of NAME, OSC_PORT and OSC_TRANSPORT, the ones the device did not give (C1). */
         std::vector<std::string> missing;
+
+        /** DEVICE_ID, when EXTENSIONS lists it and it is a non-empty string.
+            Opaque: compared as text, nothing read into it. */
+        std::optional<std::string> deviceId;
+
+        /** CLOCK, when EXTENSIONS lists it and it is an object with a SOURCE. */
+        std::optional<ClockInfo> clock;
 
         /** The object as the device sent it. */
         juce::var raw;

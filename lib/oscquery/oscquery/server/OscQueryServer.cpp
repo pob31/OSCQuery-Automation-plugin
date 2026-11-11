@@ -165,6 +165,20 @@ namespace oqa::oscquery::server
             for (const auto& name : options.extensions)
                 extensions->setProperty (juce::String (name), true);
 
+            /*  The two optional extensions: served and declared together, by
+                this function alone, so that one cannot go without the other. */
+            if (options.deviceId.has_value() && ! options.deviceId->empty())
+            {
+                info->setProperty (deviceIdExtension, juce::String (*options.deviceId));
+                extensions->setProperty (deviceIdExtension, true);
+            }
+
+            if (options.clock.has_value())
+            {
+                info->setProperty (clockExtension, options.clock->toVar());
+                extensions->setProperty (clockExtension, true);
+            }
+
             info->setProperty ("EXTENSIONS", juce::var (extensions));
             return juce::var (info);
         }

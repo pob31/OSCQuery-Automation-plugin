@@ -37,6 +37,55 @@ namespace oqa::editor
         return rate (bundlesPerSecond) + " bundles/s, " + rate (messagesPerSecond) + " msg/s, " + rate (receivedPerSecond) + " rx/s";
     }
 
+    juce::String MonitorModel::Device::timetagsWords() const
+    {
+        juce::String words;
+
+        if (clockDeclared)
+            words << "The device declares its clock: " << (clockSource.isNotEmpty() ? clockSource : juce::String ("unnamed"))
+                  << (clockDomain.isNotEmpty() ? ", domain " + clockDomain : juce::String())
+                  << (clockScheduling ? ", scheduling by timetag." : ", applying on arrival.");
+
+        juce::String whose;
+
+        if (timetagsOrigin == "device")
+            whose = honoursTimetags ? "Ticked from that declaration; a hand overrules it." : "Unticked from that declaration; a hand overrules it.";
+        else if (timetagsOrigin == "hand" || timetagsOrigin == "saved_hand")
+            whose = clockDeclared ? "Set by hand, over the declaration." : "Set by hand.";
+
+        if (whose.isNotEmpty())
+            words << (words.isNotEmpty() ? " " : "") << whose;
+
+        return words;
+    }
+
+    namespace
+    {
+        void readTiming (const juce::var& d, MonitorModel::Device& out)
+        {
+            out.honoursTimetags = static_cast<bool> (d.getProperty ("honours_timetags", false));
+            out.timetagsOrigin = d.getProperty ("timetags_origin", "").toString();
+            out.deviceId = d.getProperty ("device_id", "").toString();
+
+            const auto clock = d.getProperty ("clock", {});
+            out.clockDeclared = clock.isObject() && ! clock.isArray();
+
+            if (out.clockDeclared)
+            {
+                out.clockSource = clock.getProperty ("source", "").toString();
+                out.clockDomain = clock.getProperty ("domain", "").toString();
+                out.clockScheduling = static_cast<bool> (clock.getProperty ("scheduling", false));
+            }
+        }
+    }
+
+    juce::String MonitorModel::timetagsWords (const juce::var& deviceStatus)
+    {
+        Device device;
+        readTiming (deviceStatus, device);
+        return device.timetagsWords();
+    }
+
     juce::String MonitorModel::Device::stateWords() const
     {
         juce::String words = state;
@@ -81,6 +130,11 @@ namespace oqa::editor
 
         words << "; " << juce::String (connections) << " connection" << (connections == 1 ? "" : "s")
               << ", " << juce::String (acceptedWrites) << " writes accepted, " << juce::String (refusedWrites) << " refused";
+
+        //  The identifier it declares (6x-6), for telling two DAWs' servers apart.
+        if (deviceId.isNotEmpty())
+            words << "; DEVICE_ID " << deviceId;
+
         return words;
     }
 
@@ -109,7 +163,7 @@ namespace oqa::editor
                 out.senderReady = static_cast<bool> (d.getProperty ("sender_ready", false));
                 out.lastSeenMs = static_cast<juce::int64> (d.getProperty ("last_seen_ms", -1));
                 out.lastErrorMsAgo = static_cast<juce::int64> (d.getProperty ("last_error_ms_ago", -1));
-                out.honoursTimetags = static_cast<bool> (d.getProperty ("honours_timetags", false));
+                readTiming (d, out);
                 out.offsetMs = static_cast<double> (d.getProperty ("offset_ms", 0.0));
                 out.timingByHand = static_cast<bool> (d.getProperty ("timing_by_hand", false));
                 out.loopGuarded = static_cast<juce::int64> (d.getProperty ("loop_guarded", 0));
@@ -185,6 +239,7 @@ namespace oqa::editor
             m.server.announcing = static_cast<bool> (s.getProperty ("announcing", false));
             m.server.name = s.getProperty ("name", "").toString();
             m.server.error = s.getProperty ("error", "").toString();
+            m.server.deviceId = s.getProperty ("device_id", "").toString();
             m.server.port = static_cast<int> (s.getProperty ("port", 0));
             m.server.oscPort = static_cast<int> (s.getProperty ("osc_port", 0));
             m.server.connections = static_cast<int> (s.getProperty ("connections", 0));

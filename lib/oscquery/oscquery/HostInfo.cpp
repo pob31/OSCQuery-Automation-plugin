@@ -54,6 +54,19 @@ namespace oqa::oscquery
     }
 
     //==============================================================================
+    juce::var ClockInfo::toVar() const
+    {
+        auto* object = new juce::DynamicObject();
+        object->setProperty ("SOURCE", juce::String (source));
+
+        if (domain.has_value())
+            object->setProperty ("DOMAIN", juce::String (*domain));
+
+        object->setProperty ("SCHEDULING", scheduling);
+        return juce::var (object);
+    }
+
+    //==============================================================================
     bool HostInfo::has (std::string_view extension) const
     {
         return extensions.find (std::string (extension)) != extensions.end();
@@ -136,6 +149,41 @@ namespace oqa::oscquery
             for (const auto& name : *extensions.getArray())
                 if (name.isString())
                     info.extensions.insert (stringOf (name));
+        }
+
+        /*  The optional extensions, each only when declared (the header says
+            why). DEVICE_ID is trimmed of surrounding blanks and otherwise
+            taken as it is: the draft makes it a UUID, a client compares text. */
+        if (info.has (deviceIdExtension) && object[deviceIdExtension].isString())
+        {
+            const auto id = object[deviceIdExtension].toString().trim();
+
+            if (id.isNotEmpty())
+                info.deviceId = id.toStdString();
+        }
+
+        if (const auto clock = object.getProperty (clockExtension, {});
+            info.has (clockExtension) && isJsonObject (clock) && clock["SOURCE"].isString())
+        {
+            const auto source = clock["SOURCE"].toString().trim().toLowerCase();
+
+            if (source.isNotEmpty())
+            {
+                ClockInfo read;
+                read.source = source.toStdString();
+
+                /*  A PTP domain is a number and an NTP server a name; the
+                    draft makes DOMAIN a string, and a number is read as one. */
+                if (const auto domain = clock.getProperty ("DOMAIN", {});
+                    domain.isString() || domain.isInt() || domain.isInt64())
+                    read.domain = stringOf (domain);
+
+                //  Only a boolean true schedules: anything else claims nothing.
+                const auto scheduling = clock.getProperty ("SCHEDULING", false);
+                read.scheduling = scheduling.isBool() && static_cast<bool> (scheduling);
+
+                info.clock = std::move (read);
+            }
         }
 
         return info;

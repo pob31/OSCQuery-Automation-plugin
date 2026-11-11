@@ -23,7 +23,12 @@
         oqa-mock-device (--fixture <tree.json> | --generate <leaves>) [--port N]
                         [--name "Some name"] [--no-websocket] [--extensions A,B,C]
                         [--host-info-only] [--notify-unlisted] [--tcp] [--osc-ip IP]
-                        [--echo-ms N]
+                        [--echo-ms N] [--device-id ID] [--clock-source ntp|ptp|local]
+                        [--clock-domain D] [--clock-scheduling]
+
+    --device-id serves and declares the optional DEVICE_ID; any --clock-* flag
+    serves and declares the optional CLOCK (docs/spec/extensions-draft-0.1.md).
+    Give them after --extensions, which replaces the list.
 
     Prints one line, "oqa-mock-device http <port> osc <port>", once it answers,
     then serves until interrupted (Ctrl-C or SIGTERM). --generate serves a
@@ -48,7 +53,9 @@ namespace
     {
         std::cerr << "usage: oqa-mock-device (--fixture <tree.json> | --generate <leaves>) [--port N] [--name NAME]\n"
                      "                       [--no-websocket] [--extensions A,B,C] [--host-info-only]\n"
-                     "                       [--notify-unlisted] [--tcp] [--osc-ip IP] [--echo-ms N]\n";
+                     "                       [--notify-unlisted] [--tcp] [--osc-ip IP] [--echo-ms N]\n"
+                     "                       [--device-id ID] [--clock-source ntp|ptp|local] [--clock-domain D]\n"
+                     "                       [--clock-scheduling]\n";
         return 64;
     }
 }
@@ -58,6 +65,9 @@ int main (int argc, char** argv)
     juce::File fixture;
     int generate = 0;
     oqatest::MockDevice::Options options;
+
+    juce::String deviceId, clockSource, clockDomain;
+    bool clockScheduling = false, clockGiven = false;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -91,8 +101,48 @@ int main (int argc, char** argv)
             options.oscIp = juce::String (argv[++i]);
         else if (arg == "--echo-ms" && hasValue)
             options.echoDelayMs = juce::String (argv[++i]).getIntValue();
+        else if (arg == "--device-id" && hasValue)
+            deviceId = juce::String (argv[++i]);
+        else if (arg == "--clock-source" && hasValue)
+        {
+            clockSource = juce::String (argv[++i]);
+            clockGiven = true;
+        }
+        else if (arg == "--clock-domain" && hasValue)
+        {
+            clockDomain = juce::String (argv[++i]);
+            clockGiven = true;
+        }
+        else if (arg == "--clock-scheduling")
+            clockScheduling = clockGiven = true;
         else
             return usage();
+    }
+
+    if (deviceId.isNotEmpty() || clockGiven)
+    {
+        auto* extras = new juce::DynamicObject();
+
+        if (deviceId.isNotEmpty())
+        {
+            extras->setProperty ("DEVICE_ID", deviceId);
+            options.extensions.addIfNotAlreadyThere ("DEVICE_ID");
+        }
+
+        if (clockGiven)
+        {
+            auto* clock = new juce::DynamicObject();
+            clock->setProperty ("SOURCE", clockSource.isNotEmpty() ? clockSource : juce::String ("local"));
+
+            if (clockDomain.isNotEmpty())
+                clock->setProperty ("DOMAIN", clockDomain);
+
+            clock->setProperty ("SCHEDULING", clockScheduling);
+            extras->setProperty ("CLOCK", juce::var (clock));
+            options.extensions.addIfNotAlreadyThere ("CLOCK");
+        }
+
+        options.hostInfoExtras = juce::var (extras);
     }
 
     if (fixture == juce::File() && generate <= 0)

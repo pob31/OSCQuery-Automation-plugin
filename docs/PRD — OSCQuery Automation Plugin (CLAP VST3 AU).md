@@ -63,7 +63,7 @@ Discovery happens in the plugin editor, never in the audio thread, and only when
 
 **Conformance the plugin assumes from the device (the Core profile)**
 
-1. `HOST_INFO` with `NAME`, `OSC_PORT`, `OSC_TRANSPORT`, as the OSCQuery proposal defines them; `NAME` stable across reboot. The profile adds no field to `HOST_INFO` (decided 2026-11-04: the proposal needs support, not a rewrite).
+1. `HOST_INFO` with `NAME`, `OSC_PORT`, `OSC_TRANSPORT`, as the OSCQuery proposal defines them; `NAME` stable across reboot. The profile adds no field to `HOST_INFO` (decided 2026-11-04: the proposal needs support, not a rewrite). Two optional extensions, `DEVICE_ID` and `CLOCK`, are drafted outside the profile in `docs/spec/extensions-draft-0.1.md`; the plugin uses one only when the device lists it in `EXTENSIONS`, and assumes neither (decided 2026-11-10).
 2. A static tree whose paths survive reboot and session reload.
 3. `TYPE` and `RANGE` on every bindable leaf.
 
@@ -76,7 +76,7 @@ Each plugin instance owns a fixed pool of **N generic slots** (N = 32 by default
 | Slot field | Source | Notes |
 | --- | --- | --- |
 | Host parameter ID | Fixed at build time | Stable across binds, renames and sessions; automation curves attach to it |
-| Device | User choice in browser | Stored as `NAME` + last known host:port, plus an optional identity leaf (a read-only node the user designates, such as a serial number) |
+| Device | User choice in browser | Stored as `NAME` + last known host:port, plus an optional identity leaf (a read-only node the user designates, such as a serial number), and the device's `DEVICE_ID` when it declares one (added 2026-11-10) |
 | Path | User choice in browser | Full OSC path, with argument index for multi-argument nodes |
 | Type | From tree | `f`, `i`, `T/F`; drives the OSC type tag on send |
 | Range | From tree, user-overridable | Maps host 0–1 to device units; `RANGE` absent → user must enter min/max before the slot is active |
@@ -122,7 +122,7 @@ The plugin never changes its parameter count at runtime. It changes names, group
 
 - UDP by default to `OSC_IP:OSC_PORT` from `HOST_INFO`; TCP (SLIP-framed) when `OSC_TRANSPORT` is TCP or the node is marked `CRITICAL`.
 - **One bundle per device per audio block**, holding every changed slot from every instance in the process. Bundles are about jitter and atomicity, not raw latency: 64 tracks moving xyz become one datagram instead of 192, and the device applies x, y and z together. Bundles stay under the MTU (about 1,400 bytes, 40 to 45 three-float messages) and split beyond that.
-- **Timetags.** Devices that honour bundle timetags receive timetag = intended playback time and schedule the change themselves. No device on the bench does yet: WFS-DIY reads the timetag and discards it, applying bundles on arrival (checked in its source 2026-11-08; this sentence said "WFS-DIY does" until then), and most commercial renderers do not either. The path is built and verified against the mock device. Whether a device honours them is a per-device setting the user ticks in the Monitor, default off, since OSCQuery has no field for it and the profile adds none (decided 2026-11-04). Devices with the setting off receive the immediate timetag.
+- **Timetags.** Devices that honour bundle timetags receive timetag = intended playback time and schedule the change themselves. No device on the bench does yet: WFS-DIY reads the timetag and discards it, applying bundles on arrival (checked in its source 2026-11-08; this sentence said "WFS-DIY does" until then), and most commercial renderers do not either. The path is built and verified against the mock device. Whether a device honours them is a per-device setting the user ticks in the Monitor, default off, since OSCQuery has no field for it and the profile adds none (decided 2026-11-04). Devices with the setting off receive the immediate timetag. A device that declares the optional `CLOCK` extension pre-fills the setting from its `SCHEDULING`; set by hand, the setting wins over the device's word, and the device's word over the session's (added 2026-11-10).
 - **No rate limit by default.** Every block that has changes is sent and the device smooths. The per-slot limiter exists as protection for lossy links or slow devices, default off.
 - A shared network thread per device across all plugin instances in the process, so 64 tracks do not open 64 sockets. Instances register with a process-wide device registry; sends from the audio thread go through a lock-free queue to a realtime-priority network thread (a few hundred microseconds). An option sends with non-blocking `sendto` directly from the audio thread for the lowest latency, at the risk of a stall on a full socket buffer; default off.
 
@@ -148,7 +148,7 @@ All bindings live in the plugin's state chunk inside the DAW session. No externa
 **State chunk (JSON, versioned)**
 
 - `version`
-- `devices[]`: `name`, `last_host`, `last_port`, `tree_hash` (hash of the bindable leaves at bind time), `identity_path` and `identity_value` (optional), `honours_timetags`, `offset_ms`
+- `devices[]`: `name`, `last_host`, `last_port`, `tree_hash` (hash of the typed leaves at bind time; this said "bindable leaves" until 2026-11-10, which the hash never was: it takes every leaf with a `TYPE`, so that it does not depend on which client asks), `identity_path` and `identity_value` (optional), `device_id` (optional, the device's `DEVICE_ID` when it declares one; added 2026-11-10), `honours_timetags`, `timetags_by_hand` (optional, true when a hand set `honours_timetags`, so that it stands over a device's `CLOCK` on reload; added 2026-11-10), `offset_ms`
 - `slots[]`: `host_param_id`, `device_index`, `path`, `arg_index`, `type`, `range`, `scaling`, `direction`, `display_name`, `range_overridden`
 - `values[]`: every slot's host value, 0–1, in slot order (added 2026-11-09, milestone 4b: a CLAP restores its own parameter values from its state, and clap-validator checks that it does; every format writes them, so the chunk opens anywhere with its values)
 - `instance`: the number `$instance` stands for in this instance's paths, user-set, default 1 (added 2026-11-09 for the Monitor's bulk bind); a slot bound through a pattern keeps it as `path_pattern` beside its resolved `path`
@@ -157,6 +157,8 @@ All bindings live in the plugin's state chunk inside the DAW session. No externa
 
 1. For each device, try the last host:port and compare `NAME` from `HOST_INFO`, and the identity leaf's value when one is set.
 2. On mismatch or no answer, browse DNS-SD for the same `NAME`. Several candidates are told apart by the identity leaf, then by `tree_hash`; if still ambiguous, the device shows as unresolved and the user points at it once (in the Monitor or any instance's device pane), and every instance follows.
+
+   Added 2026-11-10, for a device that declares `DEVICE_ID` and a session that saved one: in step 1 the two IDs are compared instead of `NAME` (equal confirms the device even under a new `NAME`; different is a mismatch even under the same one), and in step 2 a device declaring the saved ID is looked for first, whatever its `NAME`. Two live devices declaring the same ID are ambiguous and the user points; a candidate declaring a different ID is never adopted without the user. A device that declares none goes through steps 1 and 2 as written.
 3. Once found, verify each bound path still exists with the same `TYPE`. Missing or retyped paths mark the slot as stale; it keeps its automation but stops sending.
 4. If `tree_hash` differs, show a one-line notice in the editor so the user knows the device changed since the bind.
 
@@ -269,7 +271,7 @@ Initial subjects: WFS-DIY, XOA/Tight-WFS, the PRISM haptic floor controller, Hol
 ## Open questions
 
 - [x] **Reply port for devices without websocket.** Closed 2026-11-04. The proposal gives no way for a client to tell the device where to send OSC feedback, and under the no-new-field rule none is added: no `REPLY_PORT`, no `/register`. Record uses `LISTEN` when the device declares it in `EXTENSIONS`; otherwise the plugin's UDP listener port is shown in the editor and configured on the device side by the user. Record is therefore a v1 feature on every device that can send OSC to a configured address, which is all of them.
-- [x] **UUID field name.** Closed 2026-11-04: no UUID, and no new `HOST_INFO` field of any kind. OSCQuery is itself a proposal that needs support, not a rewrite. Identity is `NAME`, the tree hash, and an optional identity leaf the user designates in the device's own tree; what that cannot resolve, the user resolves by pointing once. The same rule removes the `TIMETAGS` field.
+- [x] **UUID field name.** Closed 2026-11-04: no UUID, and no new `HOST_INFO` field of any kind. OSCQuery is itself a proposal that needs support, not a rewrite. Identity is `NAME`, the tree hash, and an optional identity leaf the user designates in the device's own tree; what that cannot resolve, the user resolves by pointing once. The same rule removes the `TIMETAGS` field. **Amended 2026-11-10:** the Core and Live profiles still add no field, and everything above stands for a device that offers nothing more. Beside them, an optional extensions draft (`docs/spec/extensions-draft-0.1.md`, first written by Julien Bayle) defines `DEVICE_ID` and `CLOCK`, each declared in `EXTENSIONS`, ignorable and additive. The plugin reads both when a device declares them, and its own server serves both.
 - [x] **Slot count variants.** Decided 2026-11-04, by consequence of building VST3 and AU first with JUCE: five plugin IDs (8/16/32/64/128). Hidden works in CLAP and AU, not VST3, and with JUCE each ID is its own binary, so the registry moves to a shared core library.
 - [x] **Licence.** Decided 2026-11-04: GPLv3 for the plugin and the client library, matching WFS-DIY and go.dot so their OSCQuery and mDNS code is reused as is. JUCE (AGPLv3 tier) and the VST3 SDK (GPLv3 or Steinberg agreement) make an open-source binary GPL in practice regardless of the source licence, so MIT bought nothing for the plugin. Cost: manufacturers cannot bundle the library in closed firmware; they run the conformance CLI instead.
 - [x] **JUCE CLAP status.** Checked 2026-11-04: not in JUCE 9.0.5, and nothing on upstream `develop` mentions CLAP; the Q3 2025 roadmap promise has no date. Decided: VST3 and AU first, our own CLAP shim at milestone 4b. If native support lands later it is a third way to build the same shim interface, not a design change.

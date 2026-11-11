@@ -205,3 +205,37 @@ TEST_CASE ("monitor live: a zero-slot instance registers, reads the process-wide
     CHECK (monitor.pointDeviceByName ("monitored-device", "", "127.0.0.1", rig.mock.httpPort()));
     CHECK_FALSE (monitor.pointDeviceByName ("nobody-has-this-device", "", "127.0.0.1", 1));
 }
+
+//==============================================================================
+//  Phase 6x-5: what the Monitor and the device pane say of a declared clock.
+TEST_CASE ("monitor model: a declared clock and whose word the timetags setting is, in words")
+{
+    const auto status = juce::JSON::parse (juce::String (R"json({
+        "devices": [
+            { "name": "Scheduler", "host": "192.0.2.20", "port": 5005, "honours_timetags": true, "timetags_origin": "device",
+              "device_id": "6f1c2a9e", "clock": { "source": "ptp", "domain": "0", "scheduling": true } },
+            { "name": "Overruled", "host": "192.0.2.21", "port": 5005, "honours_timetags": false, "timetags_origin": "saved_hand",
+              "clock": { "source": "ntp", "domain": null, "scheduling": true } },
+            { "name": "Arrival", "host": "192.0.2.22", "port": 5005, "honours_timetags": false, "timetags_origin": "device",
+              "clock": { "source": "local", "scheduling": false } },
+            { "name": "By hand", "host": "192.0.2.23", "port": 5005, "honours_timetags": true, "timetags_origin": "hand", "clock": null },
+            { "name": "Plain", "host": "192.0.2.24", "port": 5005, "honours_timetags": false, "timetags_origin": "chunk" }
+        ] })json"));
+
+    const auto m = MonitorModel::fromStatus (status);
+    REQUIRE (m.devices.size() == 5);
+
+    CHECK (m.devices[0].clockDeclared);
+    CHECK (m.devices[0].clockScheduling);
+    CHECK (m.devices[0].deviceId == "6f1c2a9e");
+    CHECK (m.devices[0].timetagsWords() == "The device declares its clock: ptp, domain 0, scheduling by timetag. Ticked from that declaration; a hand overrules it.");
+    CHECK (m.devices[1].timetagsWords() == "The device declares its clock: ntp, scheduling by timetag. Set by hand, over the declaration.");
+    CHECK (m.devices[2].timetagsWords() == "The device declares its clock: local, applying on arrival. Unticked from that declaration; a hand overrules it.");
+    CHECK_FALSE (m.devices[3].clockDeclared);
+    CHECK (m.devices[3].timetagsWords() == "Set by hand.");
+    CHECK (m.devices[4].timetagsWords().isEmpty());             // a device with no clock and no hand says nothing new
+
+    //  The device pane asks with one device's status object.
+    CHECK (MonitorModel::timetagsWords (status["devices"][0]) == m.devices[0].timetagsWords());
+    CHECK (MonitorModel::timetagsWords (juce::var()).isEmpty());
+}

@@ -49,12 +49,14 @@
     Callbacks run on the server's threads; the owner marshals.
 */
 
+#include <oscquery/HostInfo.h>
 #include <oscquery/osc/Value.h>
 #include <oscquery/tree/Tree.h>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -71,6 +73,12 @@ namespace oqa::oscquery::server
             std::string name;                       ///< HOST_INFO's NAME
             std::vector<std::string> extensions;    ///< what EXTENSIONS lists; LISTEN and the PATH_* govern behaviour
             std::string allow;                      ///< AccessPolicy's setting: who may write
+
+            /*  The two optional extensions (docs/spec/extensions-draft-0.1.md).
+                Set, each is served in HOST_INFO and listed in EXTENSIONS by the
+                server itself; unset, HOST_INFO is what it was without them. */
+            std::optional<std::string> deviceId;    ///< DEVICE_ID
+            std::optional<ClockInfo> clock;         ///< CLOCK
         };
 
         struct Callbacks

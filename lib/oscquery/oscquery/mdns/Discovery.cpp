@@ -193,6 +193,22 @@ namespace oqa::oscquery
         interfaces.clear();
         openInterfaces();
 
+        /*  A FRESH BROWSE (OSCQuery Automation Plugin, Phase 6x; not in go.dot):
+            what an earlier start() heard is dropped. The options may name other
+            peers or another service, and a record kept from before would be
+            listed for its whole time to live (75 minutes for a PTR) by a
+            browser that can no longer hear its withdrawal. What is still out
+            there answers the first query, a moment from now. */
+        instances.clear();
+        hosts.clear();
+
+        {
+            const std::lock_guard<std::mutex> lock (guard);
+            list.clear();
+        }
+
+        stamp.fetch_add (1, std::memory_order_acq_rel);
+
         say (onGroup ? "browsing" : "unicast", problemNow);
 
         if (announcing())

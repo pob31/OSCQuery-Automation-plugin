@@ -227,6 +227,15 @@ int main (int argc, char** argv)
             std::cout << " " << extension;
     }
 
+    //  The two optional extensions, when the device declares them.
+    if (info->deviceId.has_value())
+        std::cout << "\nDEVICE_ID " << *info->deviceId;
+
+    if (info->clock.has_value())
+        std::cout << "\nCLOCK " << info->clock->source
+                  << (info->clock->domain.has_value() ? " domain " + *info->clock->domain : std::string())
+                  << (info->clock->scheduling ? ", scheduling by time tag" : ", applying on arrival");
+
     if (! info->meetsC1())
     {
         std::cout << "\nmissing (C1):";

@@ -112,6 +112,20 @@ namespace oqa::core::server
 
         /** The NAME this process announces under, from the settings or the default. */
         static std::string defaultName();
+
+        /*  The DEVICE_ID served (Phase 6x-6; docs/spec/extensions-draft-0.1.md):
+            a UUID derived from the registry's per-user seed and the host
+            application's name. The server is one per process and has no
+            project to keep an identifier in; two DAWs on one machine share the
+            settings file and must not serve one identifier; and renaming the
+            server must not change it. Empty for an empty seed. Version 8 of
+            RFC 9562 (a UUID of the application's own making): SHA-256 of the
+            two, its first sixteen bytes, the version and variant bits set. */
+        static std::string deviceIdFor (const std::string& seed, const std::string& hostApplication);
+        static std::string hostApplicationName();
+
+        /** The seed the next start() derives the DEVICE_ID from; empty serves none. */
+        void setDeviceSeed (const std::string& seed);
         std::string name() const;
 
         int httpPort() const;
@@ -128,6 +142,8 @@ namespace oqa::core::server
 
         mutable std::mutex lock;
         std::string serverName;
+        std::string serverDeviceId;         // under lock: the DEVICE_ID served, or empty
+        std::string deviceSeed;             // under lock: what it is derived from
         std::string lastError;              // under lock
         juce::var shownVar;                 // the tree as last built, for the diff (under lock)
         std::map<std::pair<std::uint32_t, int>, float> shownValues;

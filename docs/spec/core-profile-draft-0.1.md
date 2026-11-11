@@ -30,6 +30,10 @@ be read two ways (§4). What a client needs beyond that, it keeps on its own sid
 of the device's tree identifies the unit, whether the device honours bundle timetags, which UDP port to
 send feedback to. The user sets those once in the client; the device is not asked.
 
+*(Added 2026-11-10.)* Two optional extensions, a device identifier and a clock declaration, are drafted
+apart in [`extensions-draft-0.1.md`](extensions-draft-0.1.md). They are outside this profile: no clause
+below depends on them, and a device passes Core and Live without them.
+
 ## 2. Terms
 
 - **Device**: an OSCQuery server, with the OSC server it describes.
@@ -70,17 +74,21 @@ says; `null` holds the place of an argument that has no range, and such an argum
 `f` or `i`. A leaf SHOULD have `ACCESS`: without it the proposal tells clients to assume the value is
 writable, which turns every read-only value into a send target.
 
-**C5 — Path stability.** The set of bindable leaves, by `FULL_PATH` and `TYPE`, MUST be the same after
+**C5 — Path stability.** The set of leaves, by `FULL_PATH` and `TYPE`, MUST be the same after
 a reboot, and after the device's own session or show file is saved and reloaded, as before. Paths are
 the binding; a device that renumbers its channels on reload breaks every session bound to it. Devices
 whose address space genuinely changes with configuration (channels added by the user) pass as long as
 the paths that existed before still exist with the same type. The check compares tree hashes:
 
 > *(proposed)* **Tree hash** = SHA-256, as lowercase hex, of the UTF-8 text made of one line
-> `FULL_PATH` TAB `TYPE` LF per bindable leaf, the lines sorted by byte value. `RANGE`, `VALUE`,
+> `FULL_PATH` TAB `TYPE` LF per leaf (every node with a `TYPE`, whatever its `ACCESS`), the lines
+> sorted by byte value. `RANGE`, `VALUE`,
 > `DESCRIPTION` and `UNIT` are left out on purpose: a range can follow configuration (a room size, a
 > speaker count) without breaking a binding, and a client re-reads it on every connection. `ACCESS` is
-> left out because it depends on which client asks (C6).
+> left out because it depends on which client asks (C6), and for the same reason every leaf enters
+> the hash, not only the bindable ones: two clients the device treats differently compute the same
+> hash. *(Amended 2026-11-10: this read "per bindable leaf", and whether a leaf is bindable depends on
+> its `ACCESS`.)*
 
 **C6 — `ACCESS` as reported to this client.** `ACCESS` MUST describe what the requesting client may
 do. A client that the device's allow-list does not let write MUST see `ACCESS: 1` (or 0) on leaves it
@@ -127,12 +135,13 @@ GET of one level MUST arrive within 2 s. The check reports the time and the leaf
 
 ## 5. What the profile does not ask for
 
-- **No device identity field.** A client stores `NAME`, the last host and port, the tree hash, and,
+- **No device identity field.** *(An optional one is drafted outside the profile, see §1.)* A client stores `NAME`, the last host and port, the tree hash, and,
   when the user designates one, the path and value of a read-only leaf the device already publishes
   (a serial number, a host name). On reopen it tries the last address, then DNS-SD by `NAME`, then
   tells candidates apart by that leaf's value, then by tree hash; what is still ambiguous, the user
   points at once.
 - **No timetag flag.** Whether a device honours bundle timetags is a per-device setting in the client.
+  *(An optional clock declaration that can pre-fill it is drafted outside the profile, see §1.)*
 - **No reply port.** Without `LISTEN`, a client shows its own UDP port and the user enters it in the
   device's configuration, as with any OSC controller today.
 - **No authentication.** Write access is the device's business; C6 and L3 only ask that what the

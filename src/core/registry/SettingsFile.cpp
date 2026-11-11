@@ -34,6 +34,31 @@ namespace oqa::core
         return defaultFile();
     }
 
+    juce::File SettingsFile::serverSeedFile (const juce::File& settingsFile)
+    {
+        if (settingsFile == juce::File())
+            return {};
+
+        return settingsFile.getSiblingFile (settingsFile.getFileName() + ".server-id");
+    }
+
+    std::string SettingsFile::serverSeed (const juce::File& settingsFile)
+    {
+        const auto file = serverSeedFile (settingsFile);
+
+        if (file == juce::File())
+            return {};
+
+        if (file.existsAsFile())
+            if (const auto kept = file.loadFileAsString().trim(); kept.isNotEmpty() && kept.length() <= 128)
+                return kept.toStdString();
+
+        const auto made = juce::Uuid().toDashedString();
+        file.getParentDirectory().createDirectory();
+        (void) file.replaceWithText (made + "\n");
+        return made.toStdString();
+    }
+
     std::optional<juce::var> SettingsFile::load (const juce::File& file, std::string& error)
     {
         error.clear();

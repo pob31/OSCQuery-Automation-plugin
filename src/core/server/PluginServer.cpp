@@ -20,7 +20,11 @@
 
 #include <oscquery/tree/Tree.h>
 
+#include <juce_cryptography/juce_cryptography.h>
+
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <set>
 
 #if defined (_WIN32)
@@ -144,10 +148,36 @@ namespace oqa::core::server
         stop();
     }
 
+    std::string PluginServer::hostApplicationName()
+    {
+        return juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFileNameWithoutExtension().toStdString();
+    }
+
     std::string PluginServer::defaultName()
     {
-        const auto host = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFileNameWithoutExtension();
-        return ("OSCQuery Automation @ " + juce::SystemStats::getComputerName() + " (" + host + ")").toStdString();
+        return ("OSCQuery Automation @ " + juce::SystemStats::getComputerName() + " (" + juce::String (hostApplicationName()) + ")").toStdString();
+    }
+
+    std::string PluginServer::deviceIdFor (const std::string& seed, const std::string& hostApplication)
+    {
+        if (seed.empty())
+            return {};
+
+        const auto text = seed + "\n" + hostApplication;
+        const auto digest = juce::SHA256 (text.data(), text.size()).getRawData();
+
+        std::uint8_t bytes[16];
+        std::memcpy (bytes, digest.getData(), sizeof (bytes));
+        bytes[6] = static_cast<std::uint8_t> ((bytes[6] & 0x0f) | 0x80);     // version 8
+        bytes[8] = static_cast<std::uint8_t> ((bytes[8] & 0x3f) | 0x80);     // the RFC's variant
+
+        return juce::Uuid (bytes).toDashedString().toStdString();
+    }
+
+    void PluginServer::setDeviceSeed (const std::string& seed)
+    {
+        const std::lock_guard<std::mutex> guard (lock);
+        deviceSeed = seed;
     }
 
     std::string PluginServer::name() const
@@ -168,8 +198,25 @@ namespace oqa::core::server
                                "PATH_CHANGED", "PATH_ADDED", "PATH_REMOVED" };
         options.allow = settings.serverAllow;
 
+        /*  The two optional extensions (6x-6). The identifier, when the
+            registry has a seed for it. The clock, claiming the least: writes
+            are applied on arrival (a bundle's time tag is not read), and what
+            disciplines the system clock is not this plugin's to know. */
+        std::string seed;
+
         {
             const std::lock_guard<std::mutex> guard (lock);
+            seed = deviceSeed;
+        }
+
+        if (const auto id = deviceIdFor (seed, hostApplicationName()); ! id.empty())
+            options.deviceId = id;
+
+        options.clock = oscquery::ClockInfo { "local", std::nullopt, false };
+
+        {
+            const std::lock_guard<std::mutex> guard (lock);
+            serverDeviceId = options.deviceId.value_or (std::string());
             serverName = options.name;
             lastError.clear();
             shownVar = juce::var();
@@ -482,6 +529,7 @@ namespace oqa::core::server
         {
             const std::lock_guard<std::mutex> guard (lock);
             o->setProperty ("name", juce::String (serverName));
+            o->setProperty ("device_id", juce::String (serverDeviceId));
             o->setProperty ("error", juce::String (lastError));
         }
 

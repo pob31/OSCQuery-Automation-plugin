@@ -37,7 +37,7 @@ Each plugin instance owns a fixed pool of **N generic slots** (N = 32 by default
 | Slot field | Source | Notes |
 | --- | --- | --- |
 | Host parameter ID | Fixed at build time | Stable across binds, renames and sessions; automation curves attach to it |
-| Device | User choice in browser | Stored as `NAME` + last known host:port, plus an optional identity leaf (a read-only node the user designates, such as a serial number) |
+| Device | User choice in browser | Stored as `NAME` + last known host:port, plus an optional identity leaf (a read-only node the user designates, such as a serial number), and the device's `DEVICE_ID` when it declares one (added 2026-11-10) |
 | Path | User choice in browser | Full OSC path, with argument index for multi-argument nodes |
 | Type | From tree | `f`, `i`, `T/F`; drives the OSC type tag on send |
 | Range | From tree, user-overridable | Maps host 0–1 to device units; `RANGE` absent → user must enter min/max before the slot is active |
@@ -82,14 +82,20 @@ Each plugin instance owns a fixed pool of **N generic slots** (N = 32 by default
 - **The Core profile adds no field to OSCQuery.** No UUID, no `TIMETAGS`, no `REPLY_PORT`.
   Anything the plugin needs beyond the proposal is a plugin-side setting or lives in the device's
   own tree. OSCQuery is itself a proposal that needs support, not a rewrite.
+  **Beside the profile, two optional extensions** (decided 2026-11-10): `DEVICE_ID` and `CLOCK`,
+  drafted in `docs/spec/extensions-draft-0.1.md` (first written by Julien Bayle). Each is declared
+  in `EXTENSIONS`, ignorable and additive. The plugin uses one only when the device declares it
+  (a key present but not declared is ignored) and behaves exactly as before with a device that
+  declares neither; its own server serves both. No Core or Live clause may come to depend on them.
 - **No typed OSC address anywhere in `src/`.** Addresses appear only in test fixtures. The one
   exception is the plugin's own server's namespace, which the PRD fixes (`/plugin/<instance>/slot/<n>/...`,
   UX, Headless use): its segments live in `src/core/server/ServerNamespace.h` and nowhere else
   (decided 2026-11-09, Phase 6).
 - **Standardisation is out of scope.** The profile draft is published in `docs/spec/`; who
   adopts it is not this project's deliverable.
-- **Commits go straight to `main`** until Julien Bayle starts contributing; pull requests from
-  then on. Never rewrite history on `main`.
+- **Pull requests, from 2026-11-10.** Commits went straight to `main` until Julien Bayle started
+  contributing; his first pull request was merged that day, so every change now arrives as one,
+  on a branch, with CI green before the merge. Never rewrite history on `main`.
 
 ## Code to reuse, and where it is
 

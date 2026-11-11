@@ -384,3 +384,52 @@ TEST_CASE ("a chunk from the future loads what this plugin understands and warns
     const auto var = juce::JSON::parse (chunk->toJson());
     CHECK (static_cast<int> (var.getProperty ("version", 0)) == StateChunk::currentVersion);
 }
+
+//==============================================================================
+//  Phase 6x-3: the optional device_id, an additive field of version 1.
+TEST_CASE ("v1-device-id: a device's DEVICE_ID is read, written back only where it was, and old chunks keep their bytes")
+{
+    const auto chunk = load ("v1-device-id.json", 8);
+    CHECK (chunk.version == 1);
+    CHECK (chunk.warnings.empty());
+    REQUIRE (chunk.devices.size() == 2);
+
+    CHECK (chunk.devices[0].deviceId == std::optional<std::string> ("6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47"));
+    CHECK_FALSE (chunk.devices[1].deviceId.has_value());
+    CHECK (chunk.devices[0].extras.isEmpty());          // a field this version reads is not an extra
+
+    //  And whether a hand set honours_timetags (6x-5): true on the first, absent on the second.
+    CHECK (chunk.devices[0].timetagsByHand);
+    CHECK_FALSE (chunk.devices[0].honoursTimetags);
+    CHECK_FALSE (chunk.devices[1].timetagsByHand);
+
+    //  Round trip: the same JSON, the key on the first device and not on the second.
+    const auto once = chunk.toJson();
+    std::string error;
+    const auto again = StateChunk::fromJson (once, 8, error);
+    REQUIRE_MESSAGE (again.has_value(), error);
+    CHECK (again->toJson() == once);
+
+    const auto var = juce::JSON::parse (once);
+    const auto* devices = var.getProperty ("devices", {}).getArray();
+    REQUIRE (devices != nullptr);
+    REQUIRE (devices->size() == 2);
+    CHECK ((*devices)[0].getProperty ("device_id", "").toString() == "6f1c2a9e-0b4d-4e2a-9f7c-3d5b8a1e2c47");
+    CHECK_FALSE ((*devices)[1].hasProperty ("device_id"));
+    CHECK ((*devices)[0].getProperty ("timetags_by_hand", false) == juce::var (true));
+    CHECK_FALSE ((*devices)[1].hasProperty ("timetags_by_hand"));
+
+    //  A chunk saved before this field existed says nothing of it when saved again.
+    CHECK (load ("v1-generic.json", 32).toJson().find ("device_id") == std::string::npos);
+    CHECK (load ("v1-generic.json", 32).toJson().find ("timetags_by_hand") == std::string::npos);
+
+    //  Not a string, or empty: not an identifier, and not kept as one.
+    const auto odd = StateChunk::fromJson (R"({ "version": 1, "devices": [
+        { "name": "A", "last_host": "h", "last_port": 1, "tree_hash": "", "device_id": 7, "honours_timetags": false, "offset_ms": 0 },
+        { "name": "B", "last_host": "h", "last_port": 2, "tree_hash": "", "device_id": "", "honours_timetags": false, "offset_ms": 0 } ],
+        "slots": [] })", 8, error);
+    REQUIRE_MESSAGE (odd.has_value(), error);
+    CHECK_FALSE (odd->devices[0].deviceId.has_value());
+    CHECK_FALSE (odd->devices[1].deviceId.has_value());
+    CHECK (odd->toJson().find ("device_id") == std::string::npos);
+}

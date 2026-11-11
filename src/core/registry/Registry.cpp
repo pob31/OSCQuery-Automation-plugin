@@ -124,7 +124,12 @@ namespace oqa::core
             `searching`: nothing answers, or a mismatch, and no candidate by
             NAME has turned up; `unresolved`: candidates by NAME exist and the
             identity leaf and the tree hash leave none or several; `pointed`:
-            the user pointed by hand, and whatever answers is used. */
+            the user pointed by hand, and whatever answers is used.
+
+            Phase 6x: where the chunk holds a DEVICE_ID and the device declares
+            one, the two are compared in NAME's place (`confirmed` under a new
+            NAME, `mismatch` under the same one), and a search looks for the
+            identifier before it looks for the NAME. */
         enum class Resolution { checking, confirmed, mismatch, searching, unresolved, pointed };
 
         const char* resolutionName (Resolution r) noexcept
@@ -142,11 +147,14 @@ namespace oqa::core
             return "checking";
         }
 
-        /** A device found under the chunk's NAME while searching, and what told it apart. */
+        /** A device found under the chunk's NAME, or declaring its DEVICE_ID, while searching, and what told it apart. */
         struct CandidateInfo
         {
+            std::string name;           // the NAME it answers as: not always the chunk's, when found by DEVICE_ID
             std::string host;
             int port = 0;
+            bool idKnown = false;       // the chunk holds a DEVICE_ID and this device declares one
+            bool idMatch = false;       // and it is the chunk's
             std::string identity;       // the identity leaf's value there, when read
             bool identityMatch = false;
             bool hashKnown = false;
@@ -428,6 +436,8 @@ namespace oqa::core
               onRebuild (std::move (onRebuildIn)), onNeedsResolver (std::move (onNeedsResolverIn)),
               onReceived (std::move (onReceivedIn)), guardMs (settingsIn.loopGuardMs)
         {
+            timetagsRank = ref.timetagsByHand ? TimetagsRank::savedHand : TimetagsRank::chunk;
+            publishTiming();
             buffer.resize (datagramBufferBytes);
             openDevice();
             stopReplaced();
@@ -568,6 +578,7 @@ namespace oqa::core
                 handPointed = byHand;
                 resolution = Resolution::checking;
                 resolutionNoteText.clear();
+                duplicateNoteText.clear();
                 candidates.clear();
             }
 
@@ -592,7 +603,57 @@ namespace oqa::core
         std::string resolutionNote() const
         {
             const std::lock_guard<std::mutex> guard (settingsLock);
-            return resolutionNoteText;
+            return resolutionNoteText.empty() ? duplicateNoteText : resolutionNoteText;
+        }
+
+        /*  A device confirmed by its DEVICE_ID, and another one seen since
+            that declares the same (6x-4). A search adopts the first device it
+            sees with the identifier, as it adopts the first under a NAME: DNS-SD
+            does not say when it has finished. So the second, when it turns up,
+            is said here. The device in use stays in use: taking it away in the
+            middle of a show would be worse than the doubt. `found` is the
+            Finder's list, empty when it is not running; nothing starts it for
+            this. */
+        void watchDuplicates (const std::vector<oscquery::Finder::Candidate>& found)
+        {
+            DeviceRef r;
+            std::string live;
+
+            {
+                const std::lock_guard<std::mutex> guard (settingsLock);
+
+                if (resolution != Resolution::confirmed || deviceIdLive.empty())
+                {
+                    duplicateNoteText.clear();
+                    return;
+                }
+
+                r = ref;
+                live = deviceIdLive;
+            }
+
+            std::string note;
+
+            for (const auto& c : found)
+                if (c.reachable && c.hostInfo.has_value() && ! (c.host == r.lastHost && c.port == r.lastPort)
+                    && c.hostInfo->deviceId.has_value() && *c.hostInfo->deviceId == live)
+                {
+                    note = "device \"" + r.name + "\": the device at " + c.host + ":" + std::to_string (c.port)
+                         + " declares the same DEVICE_ID; still using " + r.lastHost + ":" + std::to_string (r.lastPort);
+                    break;
+                }
+
+            {
+                const std::lock_guard<std::mutex> guard (settingsLock);
+
+                if (duplicateNoteText == note)
+                    return;
+
+                duplicateNoteText = note;
+            }
+
+            if (onRebuild)
+                onRebuild (*this);
         }
 
         /*  HOST_INFO is in at the current address: is it the device the chunk
@@ -634,8 +695,22 @@ namespace oqa::core
                     why = "its identity leaf " + *r.identityPath + " reads '" + live + "', not '" + r.identityValue.value_or (std::string()) + "'";
             }
 
-            if (info->name != r.name)
+            /*  The device's own identifier, when both sides have one, stands
+                in NAME's place (6x-4): a device renamed since is still the
+                device, and another one under the same NAME is not. With either
+                side missing, NAME is compared as it always was. */
+            const auto savedId = r.deviceId.value_or (std::string());
+            const auto liveId = info->deviceId.value_or (std::string());
+
+            if (! savedId.empty() && ! liveId.empty())
+            {
+                if (liveId != savedId)
+                    why = "it declares DEVICE_ID '" + liveId + "', not '" + savedId + "'" + (why.empty() ? "" : "; " + why);
+            }
+            else if (info->name != r.name)
+            {
                 why = "it answers as '" + info->name + "', not '" + r.name + "'" + (why.empty() ? "" : "; " + why);
+            }
 
             bool pointed = false;
             Resolution next = Resolution::confirmed;
@@ -661,7 +736,19 @@ namespace oqa::core
                 resolution = next;
                 answeredName = info->name;
                 identityLive = live;
+                deviceIdLive = liveId;
                 resolutionNoteText = note;
+
+                /*  The identifier is learnt here: a device confirmed the old
+                    way, for a chunk that has none yet, gives its own; a device
+                    the user pointed at gives its own whatever the chunk held,
+                    since the hand overrules. The next save writes it. */
+                if (! liveId.empty() && (next == Resolution::pointed || (next == Resolution::confirmed && savedId.empty())))
+                    ref.deviceId = liveId;
+
+                //  And its word on time tags, only from a device that is the one meant (6x-5).
+                if (next == Resolution::confirmed || next == Resolution::pointed)
+                    takeClock (info->clock);
 
                 if (pointed)
                     candidates.clear();
@@ -704,11 +791,63 @@ namespace oqa::core
                 r = ref;
             }
 
+            const auto elsewhere = [&r] (const oscquery::Finder::Candidate& c)
+            {
+                return c.reachable && c.hostInfo.has_value() && ! (c.host == r.lastHost && c.port == r.lastPort);
+            };
+
+            /*  First, when the chunk holds a DEVICE_ID: whoever declares it,
+                under any NAME (6x-4). Each candidate carries its HOST_INFO
+                already, so this costs no request. One is adopted. Two or more
+                are one identifier on several live devices (a copied project):
+                never picked between, the user points. */
+            const auto savedId = r.deviceId.value_or (std::string());
+
+            if (! savedId.empty())
+            {
+                std::vector<CandidateInfo> sameId;
+
+                for (const auto& c : found)
+                    if (elsewhere (c) && c.hostInfo->deviceId.has_value() && *c.hostInfo->deviceId == savedId)
+                    {
+                        CandidateInfo info;
+                        info.name = c.hostInfo->name;
+                        info.host = c.host;
+                        info.port = c.port;
+                        info.idKnown = info.idMatch = true;
+                        sameId.push_back (std::move (info));
+                    }
+
+                if (sameId.size() == 1)
+                {
+                    setAddress (sameId.front().host, sameId.front().port, false);
+
+                    const std::lock_guard<std::mutex> guard (settingsLock);
+                    candidates = sameId;
+                    return;
+                }
+
+                if (sameId.size() > 1)
+                {
+                    {
+                        const std::lock_guard<std::mutex> guard (settingsLock);
+                        resolution = Resolution::unresolved;
+                        candidates = sameId;
+                        resolutionNoteText = "device \"" + r.name + "\": " + std::to_string (sameId.size())
+                                           + " devices declare its DEVICE_ID; point at one";
+                    }
+
+                    if (onRebuild)
+                        onRebuild (*this);
+
+                    return;
+                }
+            }
+
             std::vector<const oscquery::Finder::Candidate*> byName;
 
             for (const auto& c : found)
-                if (c.reachable && c.hostInfo.has_value() && c.hostInfo->name == r.name
-                    && ! (c.host == r.lastHost && c.port == r.lastPort))
+                if (elsewhere (c) && c.hostInfo->name == r.name)
                     byName.push_back (&c);
 
             if (byName.empty())
@@ -731,8 +870,13 @@ namespace oqa::core
             for (const auto* c : byName)
             {
                 CandidateInfo info;
+                info.name = c->hostInfo->name;
                 info.host = c->host;
                 info.port = c->port;
+
+                /*  Under the right NAME with another DEVICE_ID: listed, and
+                    never adopted without the user (6x-4). */
+                info.idKnown = ! savedId.empty() && c->hostInfo->deviceId.has_value();
 
                 if (byIdentity)
                 {
@@ -745,7 +889,7 @@ namespace oqa::core
                     info.identityMatch = true;
                 }
 
-                if (info.identityMatch)
+                if (info.identityMatch && ! info.idKnown)
                     matching.push_back (infos.size());
 
                 infos.push_back (std::move (info));
@@ -816,17 +960,93 @@ namespace oqa::core
             ticks in the Monitor", "set once per rig"). Set by hand (the
             Monitor, any editor) it stands, whatever chunk is pushed next;
             set by a chunk's push it is the last chunk's word until a hand
-            sets it (6a-3). */
-        void setTiming (bool honoursTimetags, double offsetMs, bool byHand)
+            sets it (6a-3).
+
+            Phase 6x-5, for whether the device honours time tags: a device that
+            declares the optional CLOCK says so itself (SCHEDULING), and its
+            word goes between the two. A hand wins over the device, and the
+            device over a chunk; a chunk whose value a hand set in an earlier
+            run (`timetags_by_hand`) keeps a hand's standing over the device,
+            so that unticking a device which claims to schedule survives a
+            reload. The offset is never the device's. */
+        enum class TimetagsRank { chunk = 0, device = 1, savedHand = 2, hand = 3 };
+
+        void setTiming (bool honoursTimetags, double offsetMs, bool byHand, bool chunkSaysByHand = false)
         {
             const std::lock_guard<std::mutex> guard (settingsLock);
 
             if (! byHand && timingByHand)
                 return;
 
-            ref.honoursTimetags = honoursTimetags;
+            const auto rank = byHand ? TimetagsRank::hand
+                                     : (chunkSaysByHand ? TimetagsRank::savedHand : TimetagsRank::chunk);
+
+            if (rank >= timetagsRank)
+            {
+                ref.honoursTimetags = honoursTimetags;
+                timetagsRank = rank;
+            }
+
             ref.offsetMs = std::isfinite (offsetMs) ? offsetMs : 0.0;
             timingByHand = timingByHand || byHand;
+            publishTiming();
+        }
+
+        /*  What the device at the address declares of its clock, or nothing
+            (identify(), once it is confirmed or pointed). Under settingsLock. */
+        void takeClock (const std::optional<oscquery::ClockInfo>& clock)
+        {
+            clockLive = clock;
+
+            if (clock.has_value())
+            {
+                if (timetagsRank <= TimetagsRank::device)
+                {
+                    ref.honoursTimetags = clock->scheduling;
+                    timetagsRank = TimetagsRank::device;
+                }
+            }
+            else if (timetagsRank == TimetagsRank::device)
+            {
+                //  It declared a clock and no longer does: the value stands, as a chunk's would.
+                timetagsRank = TimetagsRank::chunk;
+            }
+
+            publishTiming();
+        }
+
+        /** The send path's copy (flush(), on the network thread, takes no lock). Under settingsLock. */
+        void publishTiming() noexcept
+        {
+            timetagsNow.store (ref.honoursTimetags, std::memory_order_relaxed);
+            offsetMsNow.store (ref.offsetMs, std::memory_order_relaxed);
+        }
+
+        static const char* timetagsOrigin (TimetagsRank rank) noexcept
+        {
+            switch (rank)
+            {
+                case TimetagsRank::chunk:     return "chunk";
+                case TimetagsRank::device:    return "device";
+                case TimetagsRank::savedHand: return "saved_hand";
+                case TimetagsRank::hand:      return "hand";
+            }
+
+            return "chunk";
+        }
+
+        /*  The chunk's DEVICE_ID for this device, when the chunk has one and
+            the entry has none: an identifier learnt from the device since
+            (identify()) is not undone by a chunk saved before it was. */
+        void setDeviceId (const std::optional<std::string>& id)
+        {
+            if (! id.has_value() || id->empty())
+                return;
+
+            const std::lock_guard<std::mutex> guard (settingsLock);
+
+            if (! ref.deviceId.has_value() || ref.deviceId->empty())
+                ref.deviceId = id;
         }
 
         /** The chunk's hash of this device's tree at bind time, when the chunk has one. */
@@ -1177,6 +1397,26 @@ namespace oqa::core
             o->setProperty ("offset_ms", r.offsetMs);
             o->setProperty ("timing_by_hand", timingByHandNow());
 
+            /*  Whose word `honours_timetags` is, and the clock the device
+                declares when it declares one (6x-5). */
+            {
+                const std::lock_guard<std::mutex> guard (settingsLock);
+                o->setProperty ("timetags_origin", timetagsOrigin (timetagsRank));
+
+                if (clockLive.has_value())
+                {
+                    auto* clock = new juce::DynamicObject();
+                    clock->setProperty ("source", juce::String (clockLive->source));
+                    clock->setProperty ("domain", clockLive->domain.has_value() ? juce::var (juce::String (*clockLive->domain)) : juce::var());
+                    clock->setProperty ("scheduling", clockLive->scheduling);
+                    o->setProperty ("clock", juce::var (clock));
+                }
+                else
+                {
+                    o->setProperty ("clock", juce::var());
+                }
+            }
+
             withDevice ([&] (const oscquery::Device& d)
             {
                 const auto state = d.state();
@@ -1236,6 +1476,8 @@ namespace oqa::core
                 o->setProperty ("answered_name", juce::String (answeredName));
                 o->setProperty ("identity_path", r.identityPath.has_value() ? juce::var (juce::String (*r.identityPath)) : juce::var());
                 o->setProperty ("identity_live", juce::String (identityLive));
+                o->setProperty ("device_id", r.deviceId.has_value() ? juce::var (juce::String (*r.deviceId)) : juce::var());
+                o->setProperty ("device_id_live", juce::String (deviceIdLive));
                 o->setProperty ("resolution_note", juce::String (resolutionNoteText));
                 o->setProperty ("hand_pointed", handPointed);
 
@@ -1244,8 +1486,11 @@ namespace oqa::core
                 for (const auto& c : candidates)
                 {
                     auto* entry = new juce::DynamicObject();
+                    entry->setProperty ("name", juce::String (c.name));
                     entry->setProperty ("host", juce::String (c.host));
                     entry->setProperty ("port", c.port);
+                    entry->setProperty ("id_known", c.idKnown);
+                    entry->setProperty ("id_match", c.idMatch);
                     entry->setProperty ("identity", juce::String (c.identity));
                     entry->setProperty ("identity_match", c.identityMatch);
                     entry->setProperty ("hash_known", c.hashKnown);
@@ -1459,6 +1704,7 @@ namespace oqa::core
             lastCallbackError.clear();
             answeredName.clear();
             identityLive.clear();
+            deviceIdLive.clear();
         }
 
         void noteSeen() noexcept
@@ -1729,8 +1975,10 @@ namespace oqa::core
             for (auto* g : due)
                 g->lastSentNanos.store (sentAt, std::memory_order_relaxed);
 
-            const bool timetags = ref.honoursTimetags;
-            const auto tag = timetags ? ntpNow (ref.offsetMs) : immediateTimeTag;
+            /*  The published copy: `ref` is written under settingsLock by other
+                threads, and this thread takes no lock here (6x-5). */
+            const bool timetags = timetagsNow.load (std::memory_order_relaxed);
+            const auto tag = timetags ? ntpNow (offsetMsNow.load (std::memory_order_relaxed)) : immediateTimeTag;
 
             /*  CRITICAL on a device that is not TCP: a websocket frame each
                 (spec draft L4); what the websocket cannot take goes on the wire. */
@@ -1938,9 +2186,15 @@ namespace oqa::core
         Resolution resolution = Resolution::checking;
         std::string answeredName;
         std::string identityLive;
+        std::string deviceIdLive;                   // the DEVICE_ID the device at the address declares, when it does
+        std::string duplicateNoteText;              // another live device declaring it, when one is seen
         std::string resolutionNoteText;
         bool handPointed = false;
         bool timingByHand = false;              // under settingsLock
+        TimetagsRank timetagsRank = TimetagsRank::chunk;        // under settingsLock: whose word honoursTimetags is
+        std::optional<oscquery::ClockInfo> clockLive;           // under settingsLock: the CLOCK the device declares
+        std::atomic<bool> timetagsNow { false };                // the send path's copy of ref.honoursTimetags
+        std::atomic<double> offsetMsNow { 0.0 };                // and of ref.offsetMs
         bool timingByHandNow() const { const std::lock_guard<std::mutex> guard (settingsLock); return timingByHand; }
         std::vector<CandidateInfo> candidates;
         std::atomic<bool> useDevice { false };                 // confirmed or pointed: send and LISTEN
@@ -2009,6 +2263,7 @@ namespace oqa::core
         /*  The settings on disk (6a-1): read once here, written on every
             setSettings; what went wrong, if anything, for the status. */
         juce::File settingsFile;
+        std::string serverSeed;                 // what the server's DEVICE_ID is derived from (6x-6); the server's thread of control only
         bool settingsLoaded = false;
         std::string settingsFileError;
         std::map<std::string, std::unique_ptr<DeviceEntry>> devices;
@@ -2216,6 +2471,15 @@ namespace oqa::core
                     entry->sampleRates (now);
                     entry->identify();
                     anySearching = anySearching || entry->needsSearch();
+                }
+
+                /*  Only while the Finder runs for some other reason: found()
+                    is empty otherwise, which clears what was said. */
+                {
+                    const auto seen = found();
+
+                    for (auto* entry : entries)
+                        entry->watchDuplicates (seen);
                 }
 
                 if (! anySearching)
@@ -2430,8 +2694,9 @@ namespace oqa::core
 
             if (found != devices.end())
             {
-                found->second->setTiming (ref.honoursTimetags, ref.offsetMs, false);
+                found->second->setTiming (ref.honoursTimetags, ref.offsetMs, false, ref.timetagsByHand);
                 found->second->setTreeHash (ref.treeHash);
+                found->second->setDeviceId (ref.deviceId);
                 return *found->second;
             }
 
@@ -2629,6 +2894,16 @@ namespace oqa::core
 
             if (wanted.serverEnabled)
             {
+                /*  What the server's DEVICE_ID is derived from (6x-6): read
+                    from its own small file beside the settings, made the first
+                    time a server starts for this user. Not a setting, so not
+                    in the settings file, which is written only when a setting
+                    changes. Unwritable, it lasts this run and no longer. */
+                if (impl->serverSeed.empty())
+                    impl->serverSeed = SettingsFile::serverSeed (impl->settingsFile);
+
+                impl->server->setDeviceSeed (impl->serverSeed);
+
                 std::string error;
                 (void) impl->server->start (wanted, error);       // a failure stays in the server's status
             }
