@@ -116,6 +116,26 @@ TEST_CASE ("registry: two instances on one device make one bundle per block, wit
     rig.waitReady (a);
     rig.waitReady (b);
 
+    /*  Both slots vouched for by the tree before the count starts: a move made
+        while a leaf is still unverified is held until it is, then sent, and
+        would land in a later block's bundle (seen on the Mac mini, 49 for 50). */
+    const auto everySlotOk = [] (const Instance& instance)
+    {
+        const auto status = juce::JSON::parse (juce::String (instance.statusJson()));
+        const auto* slots = status.getProperty ("slots", {}).getArray();
+
+        if (slots == nullptr || slots->isEmpty())
+            return false;
+
+        for (const auto& s : *slots)
+            if (s.getProperty ("state", "").toString() != "ok")
+                return false;
+
+        return true;
+    };
+
+    REQUIRE (waitUntil ([&] { return everySlotOk (a) && everySlotOk (b); }));
+
     /*  Nothing is sent at connection (decided 2026-11-11): a first block where the host stands still says nothing. */
     float valuesA[8] = {};
     float valuesB[8] = {};
