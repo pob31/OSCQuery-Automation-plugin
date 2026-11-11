@@ -119,6 +119,17 @@ namespace oqatest
             }));
         }
 
+        /*  Wait until a websocket client is connected to this mock. A change
+            notification (PATH_REMOVED, PATH_RENAMED, PATH_CHANGED) goes to the
+            websocket: sent before the client's is open, it is never heard, and
+            a slot being "ok" does not say the websocket is up yet. Call this
+            before making the mock change its tree (two such races lost on
+            macOS runners, 2026-11-10 and 2026-11-11). */
+        void waitHeard() const
+        {
+            REQUIRE (waitUntil ([&] { return mock.connectionCount() >= 1; }));
+        }
+
         /*  On LISTEN the library reads each path's current value once and
             delivers it (a device need not push on LISTEN). Wait for those
             `paths` first values, then drain what reached the instance, so a

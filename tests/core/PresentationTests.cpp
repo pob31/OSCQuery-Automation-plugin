@@ -148,6 +148,7 @@ TEST_CASE ("clear stale: the missing, the retyped and the renamed are unbound, t
 
     CHECK (a.clearStale() == 0);
 
+    rig.waitHeard();
     REQUIRE (rig.mock.remove (juce::String (gain.fullPath)));
     REQUIRE (rig.mock.rename (juce::String (pan.fullPath), juce::String (pan.fullPath + "_moved")));
     REQUIRE (waitUntil ([&] { return stateOf (a, 0) == "missing" && stateOf (a, 1) == "renamed"; }));

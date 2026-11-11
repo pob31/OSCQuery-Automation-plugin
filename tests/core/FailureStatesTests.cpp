@@ -165,6 +165,7 @@ TEST_CASE ("failure states: stale - the path is gone after reopen: the slot's wo
     rig.waitReady (one);
     REQUIRE (waitUntil ([&] { return slotState (one, 0) == "ok"; }));
 
+    rig.waitHeard();
     REQUIRE (rig.mock.remove (gain.fullPath));
     REQUIRE (waitUntil ([&] { return slotState (one, 0) == "missing"; }));
     CHECK (one.chunk().slots[0].path == gain.fullPath);

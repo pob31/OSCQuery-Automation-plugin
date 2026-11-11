@@ -275,6 +275,7 @@ TEST_CASE ("clap params: the clear rule: a missing slot rebound elsewhere clears
         REQUIRE (loadChunk (r.plugin, chunkWith (rig, "clear-rule-missing", [&] (oqa::core::StateChunk& c) { REQUIRE (c.slots[1].bind (gain, 0, 0, why)); })));
         REQUIRE (waitSlotState (r.plugin, 1, "ok"));
 
+        rig.waitHeard();
         REQUIRE (rig.mock.remove (juce::String (gain.fullPath)));
         REQUIRE (waitSlotState (r.plugin, 1, "missing"));
         r.host.forget();
@@ -291,6 +292,7 @@ TEST_CASE ("clap params: the clear rule: a missing slot rebound elsewhere clears
         REQUIRE (waitSlotState (r.plugin, 1, "ok"));
 
         const auto moved = gain.fullPath + "_moved";
+        rig.waitHeard();
         REQUIRE (rig.mock.rename (juce::String (gain.fullPath), juce::String (moved)));
         REQUIRE (waitSlotState (r.plugin, 1, "renamed"));
         r.host.forget();
@@ -317,6 +319,7 @@ TEST_CASE ("clap params: the clear rule: a missing slot rebound elsewhere clears
         CHECK (r.host.clears.empty());
         REQUIRE (waitSlotState (r.plugin, 1, "ok"));
 
+        rig.waitHeard();
         REQUIRE (rig.mock.remove (juce::String (pan.fullPath)));
         REQUIRE (waitSlotState (r.plugin, 1, "missing"));
 
