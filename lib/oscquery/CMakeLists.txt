@@ -44,6 +44,7 @@ add_library(oqa_oscquery STATIC
     oscquery/net/HttpGet.h
     oscquery/net/HttpGet.cpp
     oscquery/net/SocketBuffers.h
+    oscquery/net/WriteNoSignal.h
     oscquery/net/SocketBuffers.cpp
     oscquery/net/UdpEndpoint.h
     oscquery/net/UdpEndpoint.cpp
