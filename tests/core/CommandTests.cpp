@@ -132,9 +132,17 @@ namespace
         std::string slot (int n) const { return ns::slotPath (static_cast<unsigned long> (id), n); }
         std::string plugin() const     { return ns::pluginPath (static_cast<unsigned long> (id)); }
 
-        /** Write over UDP, wait for the wake, apply: how many commands were applied. */
+        /*  Write over UDP, wait for the wake, apply: how many commands were applied.
+
+            The leaf is waited for first. A slot's leaves other than its path
+            are served only once it is bound, and the server learns of a bind
+            on its own thread: a write sent the instant after the bind may
+            reach the server before the leaf does, be refused as "no such
+            path" and wake nobody (seen once on a macOS runner, 2026-11-11). */
         int write (const std::string& leaf, osc::Values values)
         {
+            REQUIRE (waitUntil ([&] { return oqatest::get (ServerOn::port(), leaf).status == 200; }));
+
             const auto before = wakes.load();
             REQUIRE (sender.send ("127.0.0.1", ServerOn::oscPort(), message (leaf, std::move (values))));
             REQUIRE (waitUntil ([&] { return wakes.load() > before; }));
