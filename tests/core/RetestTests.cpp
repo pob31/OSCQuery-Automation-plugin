@@ -497,3 +497,80 @@ TEST_CASE ("retest 2.3 and 2.6: while the host is moving a slot the device's val
     REQUIRE (waitUntil ([&] { return heard() > before; }));
     CHECK (poll() == 1);
 }
+
+//==============================================================================
+TEST_CASE ("retest of a46d285, N1: a block that reads the host parameters while a burst from the device is being applied sends none of it back, and starts no hold")
+{
+    Rig rig;
+    const auto& gain = rig.leafWhere ([] (const Node& n) { return isRangedFloat (n) && n.argumentCount() == 1; });
+    const auto range = *gain.argument (0).range;
+    const auto units = [&] (double fraction) { return *range.min + fraction * (*range.max - *range.min); };
+
+    Instance one (api(), 4, "retest-burst");
+    std::string why;
+    REQUIRE (one.bind (0, gain, 0, one.addDevice (rig.device ("retest-burst")), why));
+    one.setDirection (0, Direction::both);
+    one.connect();
+    rig.waitReady (one);
+    rig.settleListen (one, 1);
+
+    /*  The host parameter, as the JUCE shim has it: the message thread writes
+        it in apply, the audio thread reads it between beginBlock and
+        processBlock. The hold is long, so that a value mistaken for a move
+        would keep the device's next one from being applied. */
+    float parameter = 0.0f;
+    float values[4] = {};
+    const auto block = [&]
+    {
+        one.beginBlock();
+        values[0] = parameter;
+        one.processBlock (values, 4);
+    };
+    const auto heard = [&] { return static_cast<juce::int64> (Rig::deviceStatus (one).getProperty ("values_received", 0)); };
+
+    one.setHostHoldMs (5000);
+    one.pollReceived ([&] (int, float value) { parameter = value; });   // what the device said at connection
+    block();
+    sleepMs (80);
+    const auto before = sent (rig);
+
+    /*  A burst of two. The audio thread reads the parameter while the second
+        value is being applied: received already holds it, the parameter still
+        the first. Without beginBlock's lock, that first value went back to the
+        device as the host's, and its hold kept the second from being applied. */
+    auto heardBefore = heard();
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.3) }));
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.7) }));
+    REQUIRE (waitUntil ([&] { return heard() >= heardBefore + 2; }));
+
+    int applied = 0;
+    CHECK (one.pollReceived ([&] (int, float value)
+    {
+        if (++applied == 2)
+            block();                                        // mid-burst: the parameter reads the first value
+
+        parameter = value;
+    }) == 2);
+
+    CHECK (parameter == doctest::Approx (0.7f).epsilon (1e-3));
+
+    /*  Read whole, the parameter is the device's last value: nothing to send. */
+    block();
+    sleepMs (80);
+    CHECK (sent (rig) == before);
+
+    /*  No hold was started: the device's next value is applied at once. */
+    heardBefore = heard();
+    REQUIRE (rig.mock.setValue (gain.fullPath, { units (0.1) }));
+    REQUIRE (waitUntil ([&] { return heard() > heardBefore; }));
+    CHECK (one.pollReceived ([&] (int, float value) { parameter = value; }) == 1);
+    CHECK (parameter == doctest::Approx (0.1f).epsilon (1e-3));
+    block();
+    sleepMs (80);
+    CHECK (sent (rig) == before);
+
+    /*  A move of the host's own is still sent. */
+    parameter = 0.9f;
+    block();
+    REQUIRE (waitUntil ([&] { return sent (rig) == before + 1; }));
+}

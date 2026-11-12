@@ -188,6 +188,22 @@ namespace oqa::core
             lane that holds its value from the first bar would never be sent. */
         void processBlock (const float* normalised, int valueCount) noexcept OQA_AUDIO_THREAD;
 
+        /*  A VALUE THE DEVICE WROTE IS NOT A MOVE, EVEN HALF-WRITTEN (Julien
+            Bayle's retest of a46d285, N1). A shim whose host parameters the
+            message thread writes while the audio thread reads them (the JUCE
+            shim) calls beginBlock just before it reads them for processBlock.
+            A slot the message thread wrote a device value into in between was
+            read mid-burst: its value may be one the device sent a moment ago,
+            no longer the last one received. It is neither posted nor taken as
+            a move for this block; the next block, read whole, decides. Without
+            this, a burst from the device had one of its own values written
+            back as the host's, and the hold that move started kept the rest of
+            the burst, its last value included, from ever being applied.
+
+            A shim that drains on the audio thread itself (CLAP) need not call
+            it; processBlock without it behaves as before. */
+        void beginBlock() noexcept OQA_AUDIO_THREAD;
+
         /** The host's transport, told before each processBlock by a shim that knows it. Audio thread. */
         void setPlaying (bool playing) noexcept OQA_AUDIO_THREAD { playingNow = playing; }
 
@@ -342,6 +358,15 @@ namespace oqa::core
         std::unique_ptr<std::atomic<std::int64_t>[]> lastMoveMs;
         std::unique_ptr<std::atomic<float>[]> deferred;
         std::atomic<int> hostHoldMs { 200 };
+
+        /*  Per slot, a count the message thread moves to odd before it writes
+            a device value into the slot (received, then the host parameter)
+            and back to even after; and what beginBlock saw of it and of
+            received, the audio thread's own (see beginBlock). */
+        std::unique_ptr<std::atomic<std::uint32_t>[]> applying;
+        std::vector<std::uint32_t> blockApplying;
+        std::vector<float> blockReceived;
+        bool blockBegun = false;
 
         //  Record: written on the message thread, read by the audio thread and the editor.
         std::function<void()> receiveWake;
