@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace oqa::core
 {
@@ -64,9 +65,13 @@ namespace oqa::core
         seen = std::make_unique<std::atomic<float>[]> (slots);
         lastMoveMs = std::make_unique<std::atomic<std::int64_t>[]> (slots);
         deferred = std::make_unique<std::atomic<float>[]> (slots);
+        applying = std::make_unique<std::atomic<std::uint32_t>[]> (slots);
+        blockApplying.assign (slots, 0u);
+        blockReceived.assign (slots, notReceived);
 
         for (std::size_t i = 0; i < slots; ++i)
         {
+            applying[i].store (0u, std::memory_order_relaxed);
             received[i].store (notReceived, std::memory_order_relaxed);
             seen[i].store (0.0f, std::memory_order_relaxed);
             lastMoveMs[i].store (never, std::memory_order_relaxed);
@@ -546,11 +551,21 @@ namespace oqa::core
                     continue;
                 }
 
+                /*  Odd while the slot is being written: an audio thread that
+                    read the host parameter meanwhile knows its reading may be
+                    one of the device's own (beginBlock). The order is a
+                    sequence lock's: the count, a release fence, the writes,
+                    the count again with release. */
+                applying[slot].fetch_add (1u, std::memory_order_relaxed);
+                std::atomic_thread_fence (std::memory_order_release);
+
                 received[slot].store (values[i], std::memory_order_relaxed);
                 ++total;
 
                 if (apply != nullptr)
                     apply (slots[i], values[i], context);
+
+                applying[slot].fetch_add (1u, std::memory_order_release);
             }
 
             if (n < 64)
@@ -954,6 +969,13 @@ namespace oqa::core
         const auto now = steadyMs();
         const auto hold = static_cast<std::int64_t> (hostHoldMs.load (std::memory_order_relaxed));
 
+        /*  beginBlock came first: the host values were read between its look
+            at each slot's count and this one (the reader's half of the lock). */
+        const bool begun = std::exchange (blockBegun, false);
+
+        if (begun)
+            std::atomic_thread_fence (std::memory_order_acquire);
+
         for (int i = 0; i < n; ++i)
         {
             const auto slot = static_cast<std::size_t> (i);
@@ -965,6 +987,24 @@ namespace oqa::core
             {
                 last = value;
                 continue;
+            }
+
+            /*  The device's value, as it was when the host value was read. A
+                slot the message thread wrote into meanwhile was read mid-write:
+                what it reads may be one of the device's own values, already
+                superseded (retest of a46d285, N1). Nothing is decided on it;
+                `last` stays, so the next block, read whole, sees the change. The
+                transport starting is told regardless, as ever. */
+            auto fromDevice = received[slot].load (std::memory_order_relaxed);
+
+            if (begun)
+            {
+                const auto writes = applying[slot].load (std::memory_order_relaxed);
+
+                if (! started && (writes != blockApplying[slot] || (writes & 1u) != 0))
+                    continue;
+
+                fromDevice = blockReceived[slot];
             }
 
             if (! started && value == last)
@@ -997,8 +1037,6 @@ namespace oqa::core
                 /*  The host handing back what the device just sent (a slot
                     whose direction is both) is not a move to send. NaN, for a
                     slot that never received, compares false. */
-                auto fromDevice = received[static_cast<std::size_t> (i)].load (std::memory_order_relaxed);
-
                 if (! started && std::abs (value - fromDevice) <= 1.0e-6f)
                     continue;
 
@@ -1024,6 +1062,20 @@ namespace oqa::core
         }
 
         api->instanceEndBlock (handle);
+    }
+
+    void Instance::beginBlock() noexcept
+    {
+        /*  The reader's first half of the lock pollReceived writes under: each
+            slot's count, then what the device last said, before the shim reads
+            the host values. processBlock looks at the counts again after. */
+        for (std::size_t i = 0; i < static_cast<std::size_t> (count); ++i)
+        {
+            blockApplying[i] = applying[i].load (std::memory_order_acquire);
+            blockReceived[i] = received[i].load (std::memory_order_relaxed);
+        }
+
+        blockBegun = true;
     }
 
     //==============================================================================

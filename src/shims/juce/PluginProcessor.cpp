@@ -115,6 +115,12 @@ namespace oqa::shim
             layout, so leaving it alone is the pass-through. */
         const core::rt::ScopedRealtimeCheck region;
 
+        /*  The message thread may be writing a device's values into these
+            parameters while they are read: the core is told the reading starts,
+            so a value read mid-burst is not mistaken for a move of the host's
+            (Instance::beginBlock). */
+        core.beginBlock();
+
         for (std::size_t i = 0; i < slots.size(); ++i)
             values[i] = slots[i]->getValue();
 
