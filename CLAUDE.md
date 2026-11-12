@@ -94,8 +94,10 @@ Each plugin instance owns a fixed pool of **N generic slots** (N = 32 by default
 - **Standardisation is out of scope.** The profile draft is published in `docs/spec/`; who
   adopts it is not this project's deliverable.
 - **Pull requests, from 2026-11-10.** Commits went straight to `main` until Julien Bayle started
-  contributing; his first pull request was merged that day, so every change now arrives as one,
-  on a branch, with CI green before the merge. Never rewrite history on `main`.
+  contributing; his first pull request was merged that day, so every change to the plugin's
+  code arrives as one, on a branch, with CI green before the merge. A change that touches only
+  documentation (`docs/`, `CLAUDE.md`, READMEs) or only tests (`tests/`) may go straight to
+  `main` (decided 2026-11-12). Never rewrite history on `main`.
 
 ## Code to reuse, and where it is
 
