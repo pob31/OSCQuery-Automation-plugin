@@ -40,6 +40,33 @@ lists the packages JUCE needs.
 Before pushing: `python3 scripts/check-claude-md.py`, `check-pins.py` and `check-headers.py`, as
 CI's first job runs them.
 
+## Release builds and installers
+
+One script per platform builds every shipped binary (`oqa_plugins`, Release), stages it under
+`build/stage/<os>/` and makes the installer in `build/installer/`. `.github/workflows/release.yml`
+runs the same scripts.
+
+| Where | Command | Installer |
+| --- | --- | --- |
+| Windows | `pwsh scripts/build-release.ps1` | Inno Setup 6 `.exe`, unsigned |
+| macOS | `scripts/build-release.sh` | universal `.pkg`; signed and notarised when `CODESIGN_IDENTITY_APP`, `CODESIGN_IDENTITY_INSTALL` and notary credentials are set (`installer/macos/build-pkg.sh`) |
+| Linux | `scripts/build-release.sh` | `.tar.gz` with `install.sh --user` or `--system` |
+
+`--install` (`-Install` on Windows) also copies the plugins into this user's plugin folders,
+with no administrator needed, for a host on the same machine. `--skip-installer` and `--skip-build`
+do what they say.
+
+The installers put the shared core library at the fixed path the plugins look for, so every
+format in one host shares one registry: `%CommonProgramFiles%\Pix et Bel\OSCQuery Automation\`,
+`/Library/Application Support/Pix et Bel/OSCQuery Automation/`, or
+`/usr/local/lib/oscquery-automation/` (a `--user` install puts a copy beside each plugin folder
+instead).
+
+The release workflow runs when a release is published (the tag must be `v` plus the version in
+`project()`), when started by hand, and on pull requests that touch the installers. The signed
+macOS job needs approval in the `OSCQuery-Automation` environment; on a pull request it runs
+only if the PR carries the `sign` label.
+
 ## Licence
 
 GPLv3. Copyright (C) 2026 Pierre-Olivier Boulant, Julien Bayle. See [LICENSE](LICENSE).

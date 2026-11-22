@@ -1,0 +1,319 @@
+# OSCQuery Automation Plugin — Copyright (C) 2026 Pierre-Olivier Boulant, Julien Bayle
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The installers (devplan Phase 7, prepared 2026-11-22), from WFS-DIY's plugins-release.yml.
+# Every job runs the same script the author runs locally, scripts/build-release.{ps1,sh}.
+#
+#   version      reads project(VERSION); on a release, the tag must be v<that version>.
+#   windows      Inno Setup installer, unsigned (no Windows certificate); installed on the runner.
+#   linux        tarball with install.sh; installed and uninstalled on the runner.
+#   macos-build  universal build, staged, an unsigned .pkg installed on the runner, auval on
+#                every AU it installed. No secrets: it never waits for anyone.
+#   macos-sign   the staged tree from macos-build, signed with the Developer ID, packaged,
+#                notarised, stapled. The only job in the OSCQuery-Automation environment, whose
+#                secrets need the author's approval per run. On a pull request it runs only
+#                with the `sign` label, so an installer change can prove notarisation before
+#                the merge without every such PR waiting on an approval.
+#
+# When: a published release (artefacts attached to it), a manual run (artefacts on the run;
+# with a tag, attached to that release too), and pull requests that touch the installers.
+
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach to (e.g. v0.1.0); empty for artefacts only"
+        required: false
+        default: ""
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - installer/**
+      - scripts/build-release.*
+      - .github/workflows/release.yml
+      - CMakePresets.json
+      - CMakeLists.txt
+      - src/CMakeLists.txt
+      - src/shims/*/CMakeLists.txt
+      - src/core/core-shared/CMakeLists.txt
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  # The validators' settings (ci.yml): the server on, DNS-SD off, for auval as for pluginval.
+  VALIDATOR_SETTINGS: tests/validators.registry.json
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG || github.ref }}
+
+      - id: read
+        run: |
+          VERSION="$(sed -nE 's/^project\(oqa[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)"
+          [ -n "$VERSION" ] || { echo "::error::could not read VERSION from project() in CMakeLists.txt"; exit 1; }
+          if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "v$VERSION" ]; then
+            echo "::error::release tag '$RELEASE_TAG' is not v$VERSION, the version in CMakeLists.txt"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "OSCQuery Automation $VERSION${RELEASE_TAG:+ (release $RELEASE_TAG)}"
+
+  windows:
+    name: Windows installer (unsigned)
+    needs: version
+    # windows-2025 is the VS 2026 image, the same deliberate pin as ci.yml.
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG || github.ref }}
+          submodules: recursive
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build, stage, installer
+        shell: pwsh
+        run: ./scripts/build-release.ps1
+
+      - name: Install on the runner, check where everything went
+        shell: pwsh
+        run: |
+          $exe = (Get-Item "build/installer/OSCQuery-Automation-*-Windows-x64-Setup.exe").FullName
+          $p = Start-Process -Wait -PassThru -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:RUNNER_TEMP\oqa-install.log"
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\oqa-install.log"; throw "installer exit code $($p.ExitCode)" }
+          $cf = $env:CommonProgramFiles
+          $expected = @(Get-ChildItem -Directory "build/stage/windows/VST3" | ForEach-Object { "$cf\VST3\OSCQuery Automation\$($_.Name)" })
+          $expected += "$cf\CLAP\OSCQuery Automation.clap"
+          $expected += "$cf\Pix et Bel\OSCQuery Automation\OSCQuery-Automation-Core.dll"
+          $expected += "$cf\Pix et Bel\OSCQuery Automation\LICENSE.txt"
+          $missing = $expected | Where-Object { -not (Test-Path $_) }
+          if ($missing) { $missing | ForEach-Object { Write-Host "::error::not installed: $_" }; exit 1 }
+          $expected | ForEach-Object { Write-Host "ok  $_" }
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $exe = Get-Item "build/installer/OSCQuery-Automation-*-Windows-x64-Setup.exe"
+          (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower() + "  " + $exe.Name |
+            Out-File -FilePath "$($exe.FullName).sha256" -Encoding ascii -NoNewline
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: oqa-installer-windows
+          path: build/installer/OSCQuery-Automation-*-Windows-x64-Setup.exe*
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: env.RELEASE_TAG != ''
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          fail_on_unmatched_files: true
+          files: build/installer/OSCQuery-Automation-*-Windows-x64-Setup.exe*
+
+  linux:
+    name: Linux tarball
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG || github.ref }}
+          submodules: recursive
+
+      - name: Install build dependencies
+        # ci.yml's list, less what only the tests and pluginval need.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config ninja-build \
+            libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
+            libxi-dev libxrandr-dev libxrender-dev libgl-dev
+
+      - name: Build, stage, tarball
+        run: scripts/build-release.sh
+
+      - name: Install for the runner's user, check, uninstall
+        run: |
+          set -euo pipefail
+          TAR="$(ls build/installer/OSCQuery-Automation-*-Linux-*.tar.gz)"
+          mkdir -p "$RUNNER_TEMP/unpack"
+          tar -xzf "$TAR" -C "$RUNNER_TEMP/unpack"
+          DIR="$(ls -d "$RUNNER_TEMP"/unpack/OSCQuery-Automation-*)"
+          "$DIR/install.sh" --user
+          for b in "$DIR"/VST3/*.vst3; do test -d "$HOME/.vst3/$(basename "$b")"; echo "ok  ~/.vst3/$(basename "$b")"; done
+          test -f "$HOME/.clap/OSCQuery Automation.clap"
+          test -f "$HOME/.vst3/libOSCQuery-Automation-Core.so"
+          test -f "$HOME/.clap/libOSCQuery-Automation-Core.so"
+          "$DIR/uninstall.sh" --user
+          # Not `! ls`: set -e never stops on a negated command.
+          if compgen -G "$HOME/.vst3/OSCQuery Automation*.vst3" > /dev/null; then echo "::error::uninstall left a VST3"; exit 1; fi
+          test ! -e "$HOME/.clap/OSCQuery Automation.clap"
+          test ! -e "$HOME/.vst3/libOSCQuery-Automation-Core.so"
+          echo "installed and uninstalled cleanly"
+
+      - name: Checksum
+        run: |
+          cd build/installer
+          for f in OSCQuery-Automation-*-Linux-*.tar.gz; do sha256sum "$f" > "$f.sha256"; done
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: oqa-installer-linux
+          path: build/installer/OSCQuery-Automation-*-Linux-*.tar.gz*
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: env.RELEASE_TAG != ''
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          fail_on_unmatched_files: true
+          files: build/installer/OSCQuery-Automation-*-Linux-*.tar.gz*
+
+  macos-build:
+    name: macOS build + unsigned pkg + auval
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG || github.ref }}
+          submodules: recursive
+
+      - name: Install ninja
+        run: brew install ninja
+
+      - name: Build (universal), stage, unsigned pkg
+        run: scripts/build-release.sh
+
+      - name: Install the unsigned pkg on the runner, check where everything went
+        run: |
+          set -euo pipefail
+          sudo installer -pkg build/installer/OSCQuery-Automation-*-macOS.pkg -target /
+          P=/Library/Audio/Plug-Ins
+          for b in build/stage/macos/VST3/*.vst3;    do test -d "$P/VST3/$(basename "$b")";       echo "ok  $P/VST3/$(basename "$b")"; done
+          for b in build/stage/macos/AU/*.component; do test -d "$P/Components/$(basename "$b")"; echo "ok  $P/Components/$(basename "$b")"; done
+          test -d "$P/CLAP/OSCQuery Automation.clap"
+          test -f "/Library/Application Support/Pix et Bel/OSCQuery Automation/libOSCQuery-Automation-Core.dylib"
+          test -f "/Library/Application Support/Pix et Bel/OSCQuery Automation/LICENSE.txt"
+          lipo -info "/Library/Application Support/Pix et Bel/OSCQuery Automation/libOSCQuery-Automation-Core.dylib"
+
+      - name: auval on every installed AU of ours
+        run: |
+          set -euo pipefail
+          cp "$VALIDATOR_SETTINGS" "$RUNNER_TEMP/oqa-validators.json"
+          export OQA_SETTINGS_FILE="$RUNNER_TEMP/oqa-validators.json"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          AUS="$(auval -a | awk '$3 == "PxBl" { print $1, $2, $3 }')"
+          [ -n "$AUS" ] || { echo "::error::auval lists no PxBl component"; auval -a; exit 1; }
+          echo "$AUS" | while read -r type subtype manufacturer; do
+            echo "== auval -v $type $subtype $manufacturer"
+            auval -v "$type" "$subtype" "$manufacturer"
+          done
+
+      # A tarball keeps the executable bits that upload-artifact would drop.
+      - name: Pack the staged tree for macos-sign
+        run: tar -C build/stage -cf macos-stage.tar macos
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: oqa-macos-stage
+          path: macos-stage.tar
+          if-no-files-found: error
+          retention-days: 3
+
+  macos-sign:
+    name: macOS pkg (signed + notarised)
+    needs: [version, macos-build]
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'sign')
+    runs-on: macos-latest
+    # The Developer ID and the notary key live in the protected environment.
+    environment: OSCQuery-Automation
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG || github.ref }}
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: oqa-macos-stage
+
+      - name: Unpack the staged tree
+        run: mkdir -p build/stage && tar -C build/stage -xf macos-stage.tar
+
+      - name: Import the Developer ID certificates
+        uses: apple-actions/import-codesign-certs@v6
+        with:
+          p12-file-base64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+
+      - name: Write the App Store Connect API key
+        env:
+          NOTARY_API_KEY_BASE64: ${{ secrets.NOTARY_API_KEY_BASE64 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/notary"
+          KEY="$RUNNER_TEMP/notary/AuthKey.p8"
+          printf '%s' "$NOTARY_API_KEY_BASE64" | base64 --decode > "$KEY"
+          echo "NOTARY_API_KEY=$KEY" >> "$GITHUB_ENV"
+
+      - name: Find the signing identities
+        run: |
+          APP_ID="$(security find-identity -v -p codesigning | sed -nE 's/.*"(Developer ID Application: [^"]*)".*/\1/p' | head -n1)"
+          # -p codesigning leaves installer certificates out: looked up unfiltered.
+          INST_ID="$(security find-identity -v | sed -nE 's/.*"(Developer ID Installer: [^"]*)".*/\1/p' | head -n1)"
+          [ -n "$APP_ID" ]  || { echo "::error::no 'Developer ID Application' identity in the p12"; exit 1; }
+          [ -n "$INST_ID" ] || { echo "::error::no 'Developer ID Installer' identity in the p12; a .pkg cannot be notarised without one (export the p12 with both)"; exit 1; }
+          echo "CODESIGN_IDENTITY_APP=$APP_ID" >> "$GITHUB_ENV"
+          echo "CODESIGN_IDENTITY_INSTALL=$INST_ID" >> "$GITHUB_ENV"
+
+      - name: Sign, package, notarise, staple
+        env:
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+        run: installer/macos/build-pkg.sh build/stage/macos "${{ needs.version.outputs.version }}" build/installer
+
+      - name: Checksum
+        run: |
+          cd build/installer
+          for f in OSCQuery-Automation-*-macOS.pkg; do shasum -a 256 "$f" > "$f.sha256"; done
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: oqa-installer-macos
+          path: build/installer/OSCQuery-Automation-*-macOS.pkg*
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: env.RELEASE_TAG != ''
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          fail_on_unmatched_files: true
+          files: build/installer/OSCQuery-Automation-*-macOS.pkg*

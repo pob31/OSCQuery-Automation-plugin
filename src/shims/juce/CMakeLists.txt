@@ -76,6 +76,10 @@ function(oqa_add_plugin_variant slots code tag product description)
     target_compile_definitions(${target} PRIVATE
         OQA_SLOT_COUNT=${slots})
 
+    # For oqa_plugins (src/CMakeLists.txt), what the installers build: a variant added here
+    # reaches them with no script edited.
+    set_property(GLOBAL APPEND PROPERTY OQA_JUCE_PLUGIN_TARGETS ${target}_All)
+
     # The core and the client library, and the JUCE modules they need beyond what
     # juce_audio_processors brings (juce_simpleweb for the websocket, cryptography for the
     # tree hash, data_structures for the recents store). The plugin compiles its own JUCE

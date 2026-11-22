@@ -68,6 +68,45 @@
       "inherits": "vs",
       "displayName": "ci-windows",
       "description": "What the Windows CI job configures. No compiler cache: sccache with MSVC needs /Z7, and juce_recommended_config_flags gives /Zi in Debug (go.dot found this first)."
+    },
+    {
+      "name": "release-base",
+      "hidden": true,
+      "description": "What the installers are built from (scripts/build-release.*): no test suite, since CI has run it on the same commit.",
+      "cacheVariables": {
+        "OQA_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "release-windows",
+      "inherits": ["vs", "release-base"],
+      "displayName": "release-windows",
+      "description": "The Windows installer's build, x64."
+    },
+    {
+      "name": "release-macos",
+      "inherits": ["dev", "release-base"],
+      "displayName": "release-macos (universal)",
+      "description": "The macOS installer's build: arm64 and x86_64 in one binary, so the .pkg installs on either.",
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "release-linux",
+      "inherits": ["dev", "release-base"],
+      "displayName": "release-linux",
+      "description": "The Linux tarball's build, for the machine's own architecture.",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
     }
   ],
 
@@ -82,7 +121,10 @@
     { "name": "ci-macos-debug",     "configurePreset": "ci-macos",   "configuration": "Debug" },
     { "name": "ci-macos-release",   "configurePreset": "ci-macos",   "configuration": "Release" },
     { "name": "ci-windows-debug",   "configurePreset": "ci-windows", "configuration": "Debug" },
-    { "name": "ci-windows-release", "configurePreset": "ci-windows", "configuration": "Release" }
+    { "name": "ci-windows-release", "configurePreset": "ci-windows", "configuration": "Release" },
+    { "name": "release-windows",    "configurePreset": "release-windows", "configuration": "Release", "targets": ["oqa_plugins"] },
+    { "name": "release-macos",      "configurePreset": "release-macos",   "configuration": "Release", "targets": ["oqa_plugins"] },
+    { "name": "release-linux",      "configurePreset": "release-linux",   "configuration": "Release", "targets": ["oqa_plugins"] }
   ],
 
   "testPresets": [

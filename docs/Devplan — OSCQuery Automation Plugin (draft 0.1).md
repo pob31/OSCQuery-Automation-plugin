@@ -1194,6 +1194,12 @@ branch `extensions-device-id-clock`, 6x-1 to 6x-6, each with its tests. Report:
   shared core library from Phase 3.
 - Installers from WFS-DIY's scripts: Inno Setup on Windows, `.pkg` with codesign and
   notarisation on macOS, tarball with `install.sh` on Linux; CLAP paths added.
+  *Prepared ahead of the phase, 2026-11-22* (the notarisation secrets in the
+  `OSCQuery-Automation` environment the same day): `scripts/build-release.{ps1,sh}`, `installer/`,
+  `.github/workflows/release.yml`, an `oqa_plugins` target that variants join by themselves, and
+  `release-*` presets (tests off, macOS universal). The core library is installed once, at the
+  loader's fixed path; a per-user install puts a copy beside each format's folder. Fixed for good
+  from that day: the Inno Setup `AppId` and the package ids `io.github.pob31.oqa.pkg.*`.
 - pluginval on every format in CI; `auval` on macOS.
 - A cross-format test: a state chunk saved from the CLAP opens in the VST3 and the AU with the
   same bindings, since the chunk is format-neutral by construction.
