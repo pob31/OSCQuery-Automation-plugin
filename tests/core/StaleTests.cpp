@@ -373,7 +373,7 @@ TEST_CASE ("stale: ACCESS as reported to this client: a leaf the device lets us 
     restricted.waitListening (one, restrictedDevice);
     restricted.settleListen (one, 1, restrictedDevice);
     sleepMs (250);
-    const auto& range = *gain.argument (0).range;
+    const auto range = *gain.argument (0).range;    // a copy: argument() returns by value
     REQUIRE (restricted.mock.setValue (gain.fullPath, { *range.min + 0.25 * (*range.max - *range.min) }));
     std::vector<std::pair<int, float>> got;
     REQUIRE (waitUntil ([&] { one.pollReceived ([&] (int s, float v) { got.emplace_back (s, v); }); return ! got.empty(); }));

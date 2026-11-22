@@ -83,7 +83,7 @@ namespace
 
     double unitsAt (const Node& leaf, double fraction)
     {
-        const auto& range = *leaf.argument (0).range;
+        const auto range = *leaf.argument (0).range;    // a copy: argument() returns by value
         return *range.min + fraction * (*range.max - *range.min);
     }
 
