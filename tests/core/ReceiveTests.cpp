@@ -498,7 +498,7 @@ TEST_CASE ("receive: two instances receiving on one path each get the value")
     rig.settleListen (a, 1);
     b.pollReceived ({});
 
-    const auto& range = *load.argument (0).range;
+    const auto range = *load.argument (0).range;    // a copy: argument() returns by value
     REQUIRE (rig.mock.setValue (load.fullPath, { *range.min + 0.5 * (*range.max - *range.min) }));
 
     Received gotA, gotB;
@@ -538,7 +538,7 @@ TEST_CASE ("receive: the audio path allocates nothing with receiving slots in th
     one.processBlock (values, 8);
     sleepMs (20);
 
-    const auto& range = *load.argument (0).range;
+    const auto range = *load.argument (0).range;    // a copy: argument() returns by value
     REQUIRE (rig.mock.setValue (load.fullPath, { *range.min + 0.25 * (*range.max - *range.min) }));
     Received got;
     REQUIRE (waitUntil ([&] { poll (one, got); return ! got.empty(); }));
