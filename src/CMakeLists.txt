@@ -19,3 +19,11 @@ add_subdirectory(core)
 add_subdirectory(editor)
 add_subdirectory(shims/juce)
 add_subdirectory(shims/clap)
+
+# EVERY BINARY AN INSTALLER SHIPS, in one target (2026-11-22): each JUCE variant in every
+# format, the CLAP module and the shared core library. scripts/build-release.* build this and
+# nothing else, so a variant added in shims/juce reaches the installers by itself.
+get_property(_oqa_juce_plugins GLOBAL PROPERTY OQA_JUCE_PLUGIN_TARGETS)
+add_custom_target(oqa_plugins)
+add_dependencies(oqa_plugins ${_oqa_juce_plugins} oqa_clap oqa_core_shared)
+unset(_oqa_juce_plugins)

@@ -33,7 +33,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-SOURCE_SUFFIXES = {".h", ".hpp", ".c", ".cpp", ".mm", ".cmake", ".py", ".sh", ".ps1", ".yml", ".yaml"}
+SOURCE_SUFFIXES = {".h", ".hpp", ".c", ".cpp", ".mm", ".cmake", ".py", ".sh", ".ps1", ".yml", ".yaml", ".iss"}
 SOURCE_NAMES = {"CMakeLists.txt"}
 
 SPDX = "SPDX-License-Identifier: GPL-3.0-or-later"
